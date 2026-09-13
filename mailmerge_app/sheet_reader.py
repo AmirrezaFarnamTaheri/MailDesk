@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import threading
 import zipfile
 from datetime import date, datetime, time
 from pathlib import Path
@@ -18,6 +19,7 @@ MAX_CSV_FIELD_BYTES = 4 * 1024 * 1024
 MAX_XLSX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
 MAX_XLSX_MEMBER_BYTES = 192 * 1024 * 1024
 MAX_XLSX_ENTRIES = 20_000
+_CSV_PARSE_LOCK = threading.Lock()
 
 
 def _display_value(value: Any) -> str:
@@ -101,28 +103,32 @@ def _csv_rows(path: Path) -> list[list[str]]:
     if raw.count(delimiter.encode("utf-8")) > MAX_CELLS:
         raise ValueError(f"Spreadsheet exceeds the {MAX_CELLS:,}-cell safety limit.")
 
-    # csv.reader must receive the original newline stream. splitlines() corrupts
-    # valid quoted fields containing embedded newlines by turning one logical row
-    # into several physical rows.
-    previous_limit = csv.field_size_limit()
-    csv.field_size_limit(MAX_CSV_FIELD_BYTES)
-    rows: list[list[str]] = []
-    cell_count = 0
-    try:
-        reader = csv.reader(io.StringIO(text, newline=""), dialect=dialect)
-        for index, row in enumerate(reader):
-            if index >= MAX_ROWS + 100:
-                raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-row safety limit.")
-            if len(row) > MAX_COLUMNS:
-                raise ValueError(f"Spreadsheet row {index + 1} exceeds the {MAX_COLUMNS:,}-column safety limit.")
-            cell_count += len(row)
-            if cell_count > MAX_CELLS:
-                raise ValueError(f"Spreadsheet exceeds the {MAX_CELLS:,}-cell safety limit.")
-            rows.append([cell.strip() for cell in row])
-    except csv.Error as exc:
-        raise ValueError(f"Could not parse CSV: {exc}") from exc
-    finally:
-        csv.field_size_limit(previous_limit)
+    # csv.field_size_limit() is process-global, not thread-local. Spreadsheet
+    # parsing is dispatched to worker threads by the API, so concurrent readers
+    # must serialize the temporary limit change or one request can restore another
+    # request's value while it is still parsing.
+    with _CSV_PARSE_LOCK:
+        previous_limit = csv.field_size_limit()
+        csv.field_size_limit(MAX_CSV_FIELD_BYTES)
+        rows: list[list[str]] = []
+        cell_count = 0
+        try:
+            # csv.reader must receive the original newline stream. splitlines()
+            # corrupts quoted fields containing embedded newlines.
+            reader = csv.reader(io.StringIO(text, newline=""), dialect=dialect)
+            for index, row in enumerate(reader):
+                if index >= MAX_ROWS + 100:
+                    raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-row safety limit.")
+                if len(row) > MAX_COLUMNS:
+                    raise ValueError(f"Spreadsheet row {index + 1} exceeds the {MAX_COLUMNS:,}-column safety limit.")
+                cell_count += len(row)
+                if cell_count > MAX_CELLS:
+                    raise ValueError(f"Spreadsheet exceeds the {MAX_CELLS:,}-cell safety limit.")
+                rows.append([cell.strip() for cell in row])
+        except csv.Error as exc:
+            raise ValueError(f"Could not parse CSV: {exc}") from exc
+        finally:
+            csv.field_size_limit(previous_limit)
     return rows
 
 
