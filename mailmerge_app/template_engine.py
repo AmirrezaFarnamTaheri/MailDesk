@@ -139,8 +139,6 @@ def is_valid_email(address: str) -> bool:
 
 
 def _canonical_hash(parts: list[object]) -> str:
-    # Length-aware JSON encoding avoids delimiter-collision bugs such as
-    # subject='a|b', body='c' hashing like subject='a', body='b|c'.
     encoded = json.dumps(parts, ensure_ascii=False, separators=(",", ":"), sort_keys=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -156,19 +154,25 @@ def message_fingerprint(
     body_html: str = "",
     attachments: list[str] | None = None,
 ) -> str:
-    return _canonical_hash(
-        [
-            mode,
-            account.lower().strip(),
-            to.lower().strip(),
-            cc.lower().strip(),
-            bcc.lower().strip(),
-            subject,
-            body,
-            body_html,
-            sorted(attachments or []),
-        ]
-    )
+    fields = [
+        mode,
+        account.lower().strip(),
+        to.lower().strip(),
+        cc.lower().strip(),
+        bcc.lower().strip(),
+        subject,
+        body,
+        body_html,
+        ",".join(sorted(attachments or [])),
+    ]
+    if not any("|" in field for field in fields):
+        # Preserve the original v0.2 fingerprint byte-for-byte for the common case
+        # so successful operations recorded by older builds still prevent duplicate
+        # sends after upgrade. Only historically ambiguous delimiter-containing
+        # messages move to the versioned, length-aware encoding below.
+        return hashlib.sha256("|".join(fields).encode("utf-8")).hexdigest()
+    encoded = "v2:" + json.dumps(fields, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def batch_fingerprint(messages: list[Mapping[str, object]]) -> str:
