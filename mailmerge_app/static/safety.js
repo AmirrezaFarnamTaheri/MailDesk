@@ -1,5 +1,20 @@
 (() => {
   const HTML_EDIT_WARNING = 'HTML version removed because the plain-text message was edited during final review.';
+  const NO_ROWS_SENTINEL = '__maildesk_no_rows_selected__';
+
+  // The backend intentionally treats selected_rows=[] as "all rows" so callers
+  // can omit a large all-row list. The UI, however, also reaches size=0 when the
+  // user explicitly deselects every row. Encode that second state with an
+  // impossible spreadsheet row sentinel so "select nobody" can never become
+  // "process everybody".
+  const baseRenderPayload = renderPayload;
+  renderPayload = function renderPayloadWithExplicitEmptySelection() {
+    const payload = baseRenderPayload();
+    if (state.allRowNumbers.length > 0 && state.selectedRows.size === 0) {
+      payload.selected_rows = [NO_ROWS_SENTINEL];
+    }
+    return payload;
+  };
 
   // Final-review plain-text edits must not leave an older HTML alternative in the
   // MIME message. Mail clients commonly prefer HTML, so keeping stale HTML would
