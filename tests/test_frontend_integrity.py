@@ -44,6 +44,11 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("resolve-not-sent", SAFETY_JS)
         self.assertIn("message.body_html = ''", SAFETY_JS)
 
+    def test_explicit_zero_row_selection_cannot_fall_back_to_all_rows(self):
+        self.assertIn("NO_ROWS_SENTINEL", SAFETY_JS)
+        self.assertIn("state.selectedRows.size === 0", SAFETY_JS)
+        self.assertIn("payload.selected_rows = [NO_ROWS_SENTINEL]", SAFETY_JS)
+
 
 if __name__ == "__main__":
     unittest.main()
