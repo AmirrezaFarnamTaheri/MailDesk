@@ -43,6 +43,24 @@ def _browser_candidates():
     ]
 
 
+def _safe_profile_dir(user_data: Path, value: object) -> str | None:
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        return None
+    # Chromium profile directories are direct children of the user-data root.
+    # Treat Local State as untrusted input and never follow absolute/traversal
+    # entries when reading Preferences or constructing launch arguments.
+    candidate = Path(value)
+    if candidate.is_absolute() or len(candidate.parts) != 1 or "/" in value or "\\" in value:
+        return None
+    path = user_data / value
+    try:
+        if not path.is_dir() or path.resolve().parent != user_data.resolve():
+            return None
+    except OSError:
+        return None
+    return value
+
+
 def discover_profiles() -> list[dict[str, object]]:
     output: list[dict[str, object]] = []
     for browser_id, name, exe_candidates, data_candidates in _browser_candidates():
@@ -52,10 +70,11 @@ def discover_profiles() -> list[dict[str, object]]:
             continue
         local_state = _read_json(user_data / "Local State")
         info_cache = local_state.get("profile", {}).get("info_cache", {}) if isinstance(local_state, dict) else {}
-        profile_dirs = set(info_cache.keys())
+        raw_profile_dirs = set(info_cache.keys()) if isinstance(info_cache, dict) else set()
         if (user_data / "Default").exists():
-            profile_dirs.add("Default")
-        profile_dirs.update(p.name for p in user_data.glob("Profile *") if p.is_dir())
+            raw_profile_dirs.add("Default")
+        raw_profile_dirs.update(p.name for p in user_data.glob("Profile *") if p.is_dir())
+        profile_dirs = {safe for value in raw_profile_dirs if (safe := _safe_profile_dir(user_data, value))}
         for profile_dir in sorted(profile_dirs, key=_profile_sort_key):
             info = info_cache.get(profile_dir, {}) if isinstance(info_cache, dict) else {}
             preferences = _read_json(user_data / profile_dir / "Preferences")
@@ -104,6 +123,8 @@ def compose_url(
 def launch_url(profile: dict[str, object], url: str) -> None:
     executable = str(profile["executable"])
     profile_dir = str(profile["profile_dir"])
+    if not url.startswith("https://mail.google.com/mail/u/"):
+        raise ValueError("Browser sender routes may only open Gmail URLs.")
     subprocess.Popen(
         [executable, f"--profile-directory={profile_dir}", url],
         stdout=subprocess.DEVNULL,
@@ -118,6 +139,10 @@ def launch_compose(profile: dict[str, object], url: str) -> None:
 
 def _read_json(path: Path) -> dict:
     try:
+        # Profile metadata files should be small. Bound reads so a corrupt or
+        # replaced browser file cannot consume arbitrary memory during discovery.
+        if path.stat().st_size > 16 * 1024 * 1024:
+            return {}
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
