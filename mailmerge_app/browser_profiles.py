@@ -70,13 +70,16 @@ def discover_profiles() -> list[dict[str, object]]:
             continue
         local_state = _read_json(user_data / "Local State")
         info_cache = local_state.get("profile", {}).get("info_cache", {}) if isinstance(local_state, dict) else {}
-        raw_profile_dirs = set(info_cache.keys()) if isinstance(info_cache, dict) else set()
+        if not isinstance(info_cache, dict):
+            info_cache = {}
+        raw_profile_dirs = set(info_cache.keys())
         if (user_data / "Default").exists():
             raw_profile_dirs.add("Default")
         raw_profile_dirs.update(p.name for p in user_data.glob("Profile *") if p.is_dir())
         profile_dirs = {safe for value in raw_profile_dirs if (safe := _safe_profile_dir(user_data, value))}
         for profile_dir in sorted(profile_dirs, key=_profile_sort_key):
-            info = info_cache.get(profile_dir, {}) if isinstance(info_cache, dict) else {}
+            raw_info = info_cache.get(profile_dir, {})
+            info = raw_info if isinstance(raw_info, dict) else {}
             preferences = _read_json(user_data / profile_dir / "Preferences")
             emails = _extract_emails(info, preferences)
             output.append(
@@ -143,7 +146,8 @@ def _read_json(path: Path) -> dict:
         # replaced browser file cannot consume arbitrary memory during discovery.
         if path.stat().st_size > 16 * 1024 * 1024:
             return {}
-        return json.loads(path.read_text(encoding="utf-8"))
+        decoded = json.loads(path.read_text(encoding="utf-8"))
+        return decoded if isinstance(decoded, dict) else {}
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
