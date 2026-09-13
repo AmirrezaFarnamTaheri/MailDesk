@@ -52,6 +52,7 @@ APP_VERSION = "0.2.0"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENT_NAME_CHARS = 255
 MAX_OAUTH_CLIENT_BYTES = 2 * 1024 * 1024
 ATTACHMENT_CACHE_MAX_ENTRIES = 8
 ATTACHMENT_CACHE_MAX_ITEM_BYTES = 8 * 1024 * 1024
@@ -292,10 +293,17 @@ async def attachments_list() -> list[dict[str, Any]]:
 @app.post("/api/attachments")
 async def attachments_upload(file: UploadFile = File(...)) -> dict[str, Any]:
     filename = Path(file.filename or "attachment").name
-    if Path(filename).suffix.lower() in BLOCKED_ATTACHMENT_EXTENSIONS:
+    if not filename or len(filename) > MAX_ATTACHMENT_NAME_CHARS or any(ord(ch) < 32 or ord(ch) == 127 for ch in filename):
+        raise HTTPException(400, "Attachment filename is invalid or too long.")
+    suffix = Path(filename).suffix.lower()
+    if suffix in BLOCKED_ATTACHMENT_EXTENSIONS:
         raise HTTPException(400, "Executable/script attachments are blocked by MailDesk.")
+    # The stored filename is app-generated and never needs an arbitrary long or
+    # unusual extension from user input. Bounding it avoids Windows path-component
+    # failures while the original display filename remains in metadata.
+    stored_suffix = suffix if re.fullmatch(r"\.[a-z0-9]{1,19}", suffix) else ""
     attachment_id = uuid.uuid4().hex
-    stored_name = f"{attachment_id}{Path(filename).suffix.lower()}"
+    stored_name = f"{attachment_id}{stored_suffix}"
     path = attachments_dir() / stored_name
     size = 0
     with path.open("wb") as output:
@@ -617,10 +625,10 @@ async def accounts_delete(email: str) -> dict[str, bool]:
 # ---------- campaign queue / scheduling ----------
 @app.post("/api/campaigns")
 async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
-    await asyncio.to_thread(_ensure_messages_safe, payload.messages)
     max_batch = int(store.get_setting("max_batch_size", "500") or "500")
     if len(payload.messages) > max_batch:
         raise HTTPException(400, f"Batch has {len(payload.messages)} messages; current safety limit is {max_batch}.")
+    await asyncio.to_thread(_ensure_messages_safe, payload.messages)
     expected_batch = await asyncio.to_thread(batch_fingerprint, [m.model_dump() for m in payload.messages])
     if payload.batch_id != expected_batch:
         raise HTTPException(409, "Rendered batch changed. Review the latest batch before processing.")
@@ -685,6 +693,19 @@ async def campaign_get(campaign_id: str) -> dict[str, Any]:
     if not campaign:
         raise HTTPException(404, "Campaign not found.")
     return campaign
+
+
+@app.get("/api/campaigns/{campaign_id}/detail")
+async def campaign_detail(
+    campaign_id: str,
+    limit: int = Query(default=500, ge=1, le=1000),
+    needs_review_limit: int = Query(default=500, ge=1, le=1000),
+) -> dict[str, Any]:
+    campaign = store.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found.")
+    items, review_total = await asyncio.to_thread(_queue_item_summaries, campaign_id, limit, needs_review_limit)
+    return {**campaign, "items": items, "visible_items": len(items), "needs_review_total": review_total}
 
 
 @app.post("/api/campaigns/{campaign_id}/pause")
@@ -884,6 +905,8 @@ def _render_row(
         errors.append("Invalid Cc: " + ", ".join(invalid_cc))
     if invalid_bcc:
         errors.append("Invalid Bcc: " + ", ".join(invalid_bcc))
+    if "\r" in subject.text or "\n" in subject.text:
+        errors.append("Subject contains a line break.")
     if not subject.text.strip():
         warnings.append("Subject is blank.")
     if not body.text.strip() and not body_html:
@@ -948,6 +971,8 @@ def _ensure_messages_safe(messages: list[MessagePayload]) -> None:
         for address in recipients + split_addresses(message.cc) + split_addresses(message.bcc):
             if not is_valid_email(address):
                 raise HTTPException(400, f"Invalid email address in row {message.row_number}: {address}")
+        if "\r" in message.subject or "\n" in message.subject:
+            raise HTTPException(400, f"Subject contains a line break in row {message.row_number}.")
         _validate_attachment_ids(message.attachments, attachment_catalog)
 
 
@@ -1030,6 +1055,49 @@ def _attachment_payloads(
     return regular, inline
 
 
+def _queue_item_summaries(campaign_id: str, limit: int, needs_review_limit: int) -> tuple[list[dict[str, Any]], int]:
+    columns = "id,ordinal,row_number,recipient,subject,status,attempts,error"
+    with store._db() as db:
+        normal = [dict(row) for row in db.execute(
+            f"SELECT {columns} FROM queue_items WHERE campaign_id=? ORDER BY ordinal LIMIT ?",
+            (campaign_id, limit),
+        ).fetchall()]
+        review_total = int(db.execute(
+            "SELECT COUNT(*) n FROM queue_items WHERE campaign_id=? AND status='NeedsReview'",
+            (campaign_id,),
+        ).fetchone()["n"])
+        review = [dict(row) for row in db.execute(
+            f"SELECT {columns} FROM queue_items WHERE campaign_id=? AND status='NeedsReview' ORDER BY ordinal LIMIT ?",
+            (campaign_id, needs_review_limit),
+        ).fetchall()]
+    seen = {item["id"] for item in normal}
+    normal.extend(item for item in review if item["id"] not in seen)
+    return normal, review_total
+
+
+def _successful_fingerprints(fingerprints: list[str]) -> set[str]:
+    unique = list(dict.fromkeys(fp for fp in fingerprints if fp))
+    found: set[str] = set()
+    if not unique:
+        return found
+    # Each chunk is bound twice (operations + durable outbox), so keep below
+    # SQLite's traditional 999-variable ceiling even on older bundled builds.
+    with store._db() as db:
+        for start in range(0, len(unique), 400):
+            chunk = unique[start : start + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = db.execute(
+                f"""SELECT fingerprint FROM operations
+                    WHERE result='Success' AND fingerprint IN ({placeholders})
+                    UNION
+                    SELECT fingerprint FROM operation_outbox
+                    WHERE status='Success' AND fingerprint IN ({placeholders})""",
+                (*chunk, *chunk),
+            ).fetchall()
+            found.update(str(row["fingerprint"]) for row in rows)
+    return found
+
+
 # ---------- queue worker ----------
 async def _scheduler_loop() -> None:
     try:
@@ -1091,11 +1159,16 @@ async def _run_campaign_locked(campaign_id: str) -> None:
         store.set_campaign_status(campaign_id, "Running")
 
         items = store.queue_items(campaign_id)
+        skip_duplicates = bool(int(campaign.get("skip_duplicates", 1)))
+        successful_fingerprints = (
+            await asyncio.to_thread(_successful_fingerprints, [item["fingerprint"] for item in items])
+            if skip_duplicates else set()
+        )
         for item_index, item in enumerate(items):
             current = store.get_campaign(campaign_id)
             if not current or current["status"] in {"Paused", "Cancelled"}:
                 return
-            if int(current.get("skip_duplicates", 1)) and store.fingerprint_succeeded(item["fingerprint"]):
+            if skip_duplicates and item["fingerprint"] in successful_fingerprints:
                 store.update_item(item["id"], status="Skipped", error="Already processed successfully.")
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Skipped", "error": "Already processed successfully."})
                 store.refresh_campaign_counts(campaign_id)
@@ -1140,6 +1213,7 @@ async def _run_campaign_locked(campaign_id: str) -> None:
                     )
                 store.update_item(item["id"], status="Success", remote_id=remote_id, increment_attempt=True)
                 store.log_operation({**_operation_from_item(current, item, account_label), "remote_id": remote_id, "result": "Success", "error": ""})
+                successful_fingerprints.add(item["fingerprint"])
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 error = _safe_error(exc)
