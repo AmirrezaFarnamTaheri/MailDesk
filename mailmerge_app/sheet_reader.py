@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import re
 from datetime import date, datetime, time
 from pathlib import Path
@@ -10,6 +11,7 @@ from openpyxl import load_workbook
 
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm", ".csv"}
 MAX_ROWS = 100_000
+MAX_CSV_FIELD_BYTES = 4 * 1024 * 1024
 
 
 def _display_value(value: Any) -> str:
@@ -54,11 +56,23 @@ def _csv_rows(path: Path) -> list[list[str]]:
             continue
     if text is None:
         text = raw.decode("utf-8", errors="replace")
+
+    # csv.reader must receive the original newline stream. splitlines() corrupts
+    # valid quoted fields containing embedded newlines by turning one logical row
+    # into several physical rows.
+    previous_limit = csv.field_size_limit()
+    csv.field_size_limit(max(previous_limit, MAX_CSV_FIELD_BYTES))
     rows: list[list[str]] = []
-    for index, row in enumerate(csv.reader(text.splitlines())):
-        if index >= MAX_ROWS + 100:
-            raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-row safety limit.")
-        rows.append([cell.strip() for cell in row])
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""))
+        for index, row in enumerate(reader):
+            if index >= MAX_ROWS + 100:
+                raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-row safety limit.")
+            rows.append([cell.strip() for cell in row])
+    except csv.Error as exc:
+        raise ValueError(f"Could not parse CSV: {exc}") from exc
+    finally:
+        csv.field_size_limit(previous_limit)
     return rows
 
 
