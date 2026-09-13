@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+import html
 import io
 import json
 import mimetypes
@@ -38,6 +39,7 @@ from .gmail_client import (
     send_message,
     spreadsheet_id_from_url,
     token_has_scope,
+    token_is_valid,
 )
 from .google_sheets import snapshot_spreadsheet
 from .paths import attachments_dir, imports_dir
@@ -51,6 +53,7 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 BLOCKED_ATTACHMENT_EXTENSIONS = {".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".js", ".jar"}
 BROWSER_VERIFICATION_MINUTES = 30
+IMPORT_TTL_HOURS = 24
 
 store = Store()
 imports: dict[str, dict[str, Any]] = {}
@@ -58,16 +61,22 @@ oauth_sessions: dict[str, dict[str, Any]] = {}
 queue_tasks: dict[str, asyncio.Task] = {}
 scheduler_task: asyncio.Task | None = None
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global scheduler_task
+    _cleanup_orphan_import_files()
     if scheduler_task is None or scheduler_task.done():
         scheduler_task = asyncio.create_task(_scheduler_loop())
     try:
         yield
     finally:
-        for task in list(queue_tasks.values()):
+        tasks = list(queue_tasks.values())
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        queue_tasks.clear()
         if scheduler_task:
             scheduler_task.cancel()
             try:
@@ -124,14 +133,14 @@ class SnippetPayload(BaseModel):
 
 
 class RenderRequest(BaseModel):
-    import_id: str
-    sheet: str
+    import_id: str = Field(min_length=1, max_length=80)
+    sheet: str = Field(min_length=1, max_length=255)
     header_row: int | None = Field(default=None, ge=1, le=1000)
-    to_column: str
-    name_column: str = ""
-    cc_column: str = ""
-    bcc_column: str = ""
-    attachment_column: str = ""
+    to_column: str = Field(max_length=255)
+    name_column: str = Field(default="", max_length=255)
+    cc_column: str = Field(default="", max_length=255)
+    bcc_column: str = Field(default="", max_length=255)
+    attachment_column: str = Field(default="", max_length=255)
     subject: str = Field(max_length=998)
     body: str = Field(max_length=200_000)
     body_html: str = Field(default="", max_length=400_000)
@@ -139,39 +148,37 @@ class RenderRequest(BaseModel):
     cc_template: str = Field(default="", max_length=4_000)
     bcc_template: str = Field(default="", max_length=4_000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=20)
-    filter_column: str = ""
+    filter_column: str = Field(default="", max_length=255)
     filter_operator: Literal["equals", "contains", "not_empty"] = "equals"
-    filter_value: str = ""
-    sort_column: str = ""
+    filter_value: str = Field(default="", max_length=20_000)
+    sort_column: str = Field(default="", max_length=255)
     sort_direction: Literal["asc", "desc"] = "asc"
-    selected_rows: list[str] = Field(default_factory=list)
-    row_overrides: dict[str, dict[str, str]] = Field(default_factory=dict)
+    selected_rows: list[str] = Field(default_factory=list, max_length=100_000)
+    row_overrides: dict[str, dict[str, str]] = Field(default_factory=dict, max_length=100_000)
     limit: int = Field(default=0, ge=0, le=100_000)
     trim_values: bool = True
 
 
 class MessagePayload(BaseModel):
-    row_number: str
-    display_name: str = ""
-    to: str
-    cc: str = ""
-    bcc: str = ""
-    subject: str
-    body: str
-    body_html: str = ""
+    row_number: str = Field(max_length=40)
+    display_name: str = Field(default="", max_length=1_000)
+    to: str = Field(max_length=4_000)
+    cc: str = Field(default="", max_length=4_000)
+    bcc: str = Field(default="", max_length=4_000)
+    subject: str = Field(max_length=998)
+    body: str = Field(max_length=200_000)
+    body_html: str = Field(default="", max_length=400_000)
     attachments: list[str] = Field(default_factory=list, max_length=20)
-    errors: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
+    errors: list[str] = Field(default_factory=list, max_length=100)
+    warnings: list[str] = Field(default_factory=list, max_length=100)
 
 
 class BatchHashRequest(BaseModel):
-    messages: list[MessagePayload]
+    messages: list[MessagePayload] = Field(max_length=10_000)
 
 
 class BrowserSenderPayload(BaseModel):
-    id: str = ""
+    id: str = Field(default="", max_length=80)
     label: str = Field(min_length=1, max_length=120)
     browser_id: str = Field(min_length=1, max_length=40)
     profile_dir: str = Field(min_length=1, max_length=120)
@@ -180,23 +187,23 @@ class BrowserSenderPayload(BaseModel):
 
 
 class GoogleSheetImportRequest(BaseModel):
-    account: str
-    spreadsheet: str
+    account: str = Field(min_length=3, max_length=320)
+    spreadsheet: str = Field(min_length=1, max_length=2_048)
 
 
 class CampaignRequest(BaseModel):
     name: str = Field(default="", max_length=160)
     source_name: str = Field(default="", max_length=260)
     mode: Literal["dry_run", "browser", "draft", "send"]
-    account: str = ""
-    browser_sender_id: str = ""
+    account: str = Field(default="", max_length=320)
+    browser_sender_id: str = Field(default="", max_length=80)
     batch_id: str = Field(min_length=12, max_length=128)
-    messages: list[MessagePayload]
+    messages: list[MessagePayload] = Field(max_length=10_000)
     skip_duplicates: bool = True
     throttle_ms: int = Field(default=750, ge=0, le=60_000)
-    scheduled_at: str = ""
+    scheduled_at: str = Field(default="", max_length=80)
     reviewed: bool = False
-    confirm_text: str = ""
+    confirm_text: str = Field(default="", max_length=200)
 
 
 class SettingsPayload(BaseModel):
@@ -323,6 +330,7 @@ async def attachments_delete(attachment_id: str) -> dict[str, bool]:
 # ---------- spreadsheet sources ----------
 @app.post("/api/imports")
 async def import_sheet(file: UploadFile = File(...)) -> dict[str, Any]:
+    _prune_imports()
     filename = Path(file.filename or "spreadsheet").name
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -342,7 +350,7 @@ async def import_sheet(file: UploadFile = File(...)) -> dict[str, Any]:
         sheets = list_sheets(path)
     except Exception as exc:
         path.unlink(missing_ok=True)
-        raise HTTPException(400, f"Could not read spreadsheet: {exc}") from exc
+        raise HTTPException(400, f"Could not read spreadsheet: {_safe_error(exc)}") from exc
     meta = {
         "import_id": import_id, "filename": filename, "size": size, "sheets": sheets,
         "source_type": "file", "path": path, "snapshot_at": _utc_now(),
@@ -353,18 +361,21 @@ async def import_sheet(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.post("/api/imports/google-sheet")
 async def import_google_sheet(payload: GoogleSheetImportRequest) -> dict[str, Any]:
+    _prune_imports()
     try:
         spreadsheet_id = spreadsheet_id_from_url(payload.spreadsheet)
         token, _ = await _verified_google_account(payload.account, require_scope=SHEETS_SCOPE)
     except (ValueError, RuntimeError, httpx.HTTPError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, _safe_error(exc)) from exc
     import_id = uuid.uuid4().hex
     path = imports_dir() / f"{import_id}.xlsx"
     try:
         snapshot = await snapshot_spreadsheet(token, spreadsheet_id, path)
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Could not read Google Sheet: {exc}") from exc
+        path.unlink(missing_ok=True)
+        raise HTTPException(502, f"Could not read Google Sheet: {_safe_error(exc)}") from exc
     except ValueError as exc:
+        path.unlink(missing_ok=True)
         raise HTTPException(400, str(exc)) from exc
     meta = {
         "import_id": import_id,
@@ -390,8 +401,10 @@ async def refresh_import(import_id: str) -> dict[str, Any]:
     token, _ = await _verified_google_account(str(meta["google_account"]), require_scope=SHEETS_SCOPE)
     try:
         snapshot = await snapshot_spreadsheet(token, str(meta["spreadsheet_id"]), Path(meta["path"]))
-    except Exception as exc:
-        raise HTTPException(502, f"Could not refresh Google Sheet: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Could not refresh Google Sheet: {_safe_error(exc)}") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     meta.update({"filename": snapshot["title"], "sheets": snapshot["sheets"], "size": Path(meta["path"]).stat().st_size, "snapshot_at": _utc_now(), "total_cells": snapshot["total_cells"]})
     return _public_import(meta)
 
@@ -407,7 +420,7 @@ async def import_preview(import_id: str, sheet: str = Query(...), header_row: in
     try:
         headers, rows, detected = table(path, sheet, header_row)
     except Exception as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, _safe_error(exc)) from exc
     return {
         "headers": headers,
         "header_row": detected,
@@ -426,7 +439,7 @@ async def render_messages(payload: RenderRequest) -> dict[str, Any]:
     try:
         headers, rows, detected = table(path, payload.sheet, payload.header_row)
     except Exception as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, _safe_error(exc)) from exc
     _validate_mapping_columns(payload, headers)
 
     if payload.selected_rows:
@@ -449,7 +462,7 @@ async def render_messages(payload: RenderRequest) -> dict[str, Any]:
     if payload.limit:
         rows = rows[: payload.limit]
 
-    attachment_by_name = {item["name"].casefold(): item["id"] for item in store.list_attachments()}
+    attachment_by_name = {item["name"].casefold(): item["id"] for item in reversed(store.list_attachments())}
     messages = [_render_row(payload, row, attachment_by_name) for row in rows]
     _mark_duplicate_recipients(messages)
     invalid = sum(bool(message["errors"]) for message in messages)
@@ -530,7 +543,7 @@ async def browser_sender_verify_confirm(sender_id: str) -> dict[str, Any]:
 
 # ---------- Google accounts ----------
 @app.get("/api/accounts")
-async def accounts_list() -> list[dict[str, str]]:
+async def accounts_list() -> list[dict[str, Any]]:
     output = []
     for item in store.list_accounts():
         account = store.get_account(item["email"])
@@ -570,11 +583,11 @@ async def google_callback(code: str = "", state: str = "", error: str = "") -> H
     try:
         token = await exchange_code(session["client"], code, session["verifier"], session["redirect_uri"])
         token["scope"] = token.get("scope") or session.get("requested_scopes", "")
-        email = await profile_email(token)
-        store.save_account(email, token, session["client"])
-        return _oauth_page(True, f"Connected {email}. You can close this tab.")
+        email_address = await profile_email(token)
+        store.save_account(email_address, token, session["client"])
+        return _oauth_page(True, f"Connected {email_address}. You can close this tab.")
     except Exception as exc:
-        return _oauth_page(False, f"Could not connect Google: {exc}")
+        return _oauth_page(False, f"Could not connect Google: {_safe_error(exc)}")
 
 
 @app.delete("/api/accounts/{email}")
@@ -587,8 +600,6 @@ async def accounts_delete(email: str) -> dict[str, bool]:
 @app.post("/api/campaigns")
 async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
     _ensure_messages_safe(payload.messages)
-    if not payload.messages:
-        raise HTTPException(400, "There are no messages to process.")
     max_batch = int(store.get_setting("max_batch_size", "500") or "500")
     if len(payload.messages) > max_batch:
         raise HTTPException(400, f"Batch has {len(payload.messages)} messages; current safety limit is {max_batch}.")
@@ -659,7 +670,9 @@ async def campaign_get(campaign_id: str) -> dict[str, Any]:
 
 @app.post("/api/campaigns/{campaign_id}/pause")
 async def campaign_pause(campaign_id: str) -> dict[str, Any]:
-    _require_campaign(campaign_id)
+    campaign = _require_campaign(campaign_id)
+    if campaign["status"] in {"Completed", "CompletedWithErrors", "Cancelled"}:
+        raise HTTPException(400, f"Cannot pause a {campaign['status'].lower()} campaign.")
     store.set_campaign_status(campaign_id, "Paused")
     return store.get_campaign(campaign_id, include_items=True) or {}
 
@@ -667,8 +680,10 @@ async def campaign_pause(campaign_id: str) -> dict[str, Any]:
 @app.post("/api/campaigns/{campaign_id}/resume")
 async def campaign_resume(campaign_id: str) -> dict[str, Any]:
     campaign = _require_campaign(campaign_id)
-    if campaign["status"] in {"Completed", "Cancelled"}:
+    if campaign["status"] in {"Completed", "CompletedWithErrors", "Cancelled"}:
         raise HTTPException(400, f"Cannot resume a {campaign['status'].lower()} campaign.")
+    if not store.queue_items(campaign_id):
+        raise HTTPException(400, "This campaign has no pending items to resume.")
     if campaign["mode"] == "browser":
         _require_fresh_browser_sender(campaign["browser_sender_id"])
     store.set_campaign_status(campaign_id, "Queued")
@@ -678,17 +693,24 @@ async def campaign_resume(campaign_id: str) -> dict[str, Any]:
 
 @app.post("/api/campaigns/{campaign_id}/cancel")
 async def campaign_cancel(campaign_id: str) -> dict[str, Any]:
-    _require_campaign(campaign_id)
-    store.set_campaign_status(campaign_id, "Cancelled")
+    campaign = _require_campaign(campaign_id)
+    if campaign["status"] in {"Completed", "CompletedWithErrors"}:
+        raise HTTPException(400, f"Cannot cancel a {campaign['status'].lower()} campaign.")
+    if campaign["status"] != "Cancelled":
+        store.set_campaign_status(campaign_id, "Cancelled")
     return store.get_campaign(campaign_id, include_items=True) or {}
 
 
 @app.post("/api/campaigns/{campaign_id}/retry-failed")
 async def campaign_retry(campaign_id: str) -> dict[str, Any]:
     campaign = _require_campaign(campaign_id)
+    if campaign["status"] == "Cancelled":
+        raise HTTPException(400, "Cannot retry a cancelled campaign.")
     if campaign["mode"] == "browser":
         _require_fresh_browser_sender(campaign["browser_sender_id"])
-    store.retry_failed(campaign_id)
+    retried = store.retry_failed(campaign_id)
+    if retried <= 0:
+        raise HTTPException(400, "This campaign has no failed items to retry.")
     store.set_campaign_status(campaign_id, "Queued")
     _start_campaign_task(campaign_id)
     return store.get_campaign(campaign_id, include_items=True) or {}
@@ -706,7 +728,8 @@ async def history_csv(limit: int = Query(default=2000, ge=1, le=20_000)) -> Stre
     fields = ["timestamp_utc", "campaign_id", "mode", "account", "row_number", "recipient", "subject", "remote_id", "result", "error"]
     writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(rows)
+    for row in rows:
+        writer.writerow({key: _csv_safe(row.get(key, "")) for key in fields})
     return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=maildesk-history.csv"})
 
 
@@ -832,7 +855,10 @@ def _ensure_messages_safe(messages: list[MessagePayload]) -> None:
     if unsafe:
         raise HTTPException(400, "Fix validation errors before processing rows: " + ", ".join(unsafe[:12]))
     for message in messages:
-        for address in split_addresses(message.to) + split_addresses(message.cc) + split_addresses(message.bcc):
+        recipients = split_addresses(message.to)
+        if not recipients:
+            raise HTTPException(400, f"Recipient is blank in row {message.row_number}.")
+        for address in recipients + split_addresses(message.cc) + split_addresses(message.bcc):
             if not is_valid_email(address):
                 raise HTTPException(400, f"Invalid email address in row {message.row_number}: {address}")
         _validate_attachment_ids(message.attachments)
@@ -863,6 +889,8 @@ def _attachment_payloads(
         if not item:
             raise RuntimeError(f"Attachment disappeared: {attachment_id}")
         path = attachments_dir() / item["stored_name"]
+        if not path.is_file():
+            raise RuntimeError(f"Attachment file disappeared: {item['name']}")
         payload = path.read_bytes()
         mime_type = item.get("mime_type") or mimetypes.guess_type(item["name"])[0]
         if f"cid:{attachment_id}" in (body_html or "") and str(mime_type or "").startswith("image/"):
@@ -888,12 +916,19 @@ def _start_campaign_task(campaign_id: str) -> None:
     task = queue_tasks.get(campaign_id)
     if task and not task.done():
         return
-    queue_tasks[campaign_id] = asyncio.create_task(_run_campaign(campaign_id))
+    task = asyncio.create_task(_run_campaign(campaign_id))
+    queue_tasks[campaign_id] = task
+
+    def discard(finished: asyncio.Task) -> None:
+        if queue_tasks.get(campaign_id) is finished:
+            queue_tasks.pop(campaign_id, None)
+
+    task.add_done_callback(discard)
 
 
 async def _run_campaign(campaign_id: str) -> None:
     campaign = store.get_campaign(campaign_id)
-    if not campaign or campaign["status"] in {"Cancelled", "Completed"}:
+    if not campaign or campaign["status"] in {"Cancelled", "Completed", "CompletedWithErrors"}:
         return
     mode = campaign["mode"]
     account_label = campaign.get("account", "")
@@ -909,23 +944,38 @@ async def _run_campaign(campaign_id: str) -> None:
             account_label = actual
         store.set_campaign_status(campaign_id, "Running")
 
-        for item in store.queue_items(campaign_id):
+        items = store.queue_items(campaign_id)
+        for item_index, item in enumerate(items):
             current = store.get_campaign(campaign_id)
             if not current or current["status"] in {"Paused", "Cancelled"}:
                 return
             if int(current.get("skip_duplicates", 1)) and store.fingerprint_succeeded(item["fingerprint"]):
                 store.update_item(item["id"], status="Skipped", error="Already processed successfully.")
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Skipped", "error": "Already processed successfully."})
+                store.refresh_campaign_counts(campaign_id)
                 continue
+
+            # Long-running queues may outlive an OAuth access token. Refresh only
+            # when the token approaches expiry instead of making a profile request
+            # for every row.
+            if mode in {"draft", "send"} and not token_is_valid(gmail_token or {}, margin_seconds=120):
+                gmail_token, actual = await _verified_google_account(current["account"], require_scope=GMAIL_SCOPE)
+                account_label = actual
 
             try:
                 remote_id = ""
                 if mode == "dry_run":
                     remote_id = "DryRunOnly"
                 elif mode == "browser":
-                    sender = _require_fresh_browser_sender(current["browser_sender_id"])
-                    url = compose_url(item["recipient"], item["subject"], item["body"], item["cc"], item["bcc"], int(sender["gmail_slot"]))
-                    launch_compose(browser_profile or _profile_for_sender(sender), url)
+                    try:
+                        sender = _require_fresh_browser_sender(current["browser_sender_id"])
+                        url = compose_url(item["recipient"], item["subject"], item["body"], item["cc"], item["bcc"], int(sender["gmail_slot"]))
+                        launch_compose(browser_profile or _profile_for_sender(sender), url)
+                    except Exception as exc:
+                        # Browser route/verification failures are campaign-level
+                        # setup failures. Do not burn every remaining row as Failed.
+                        store.set_campaign_status(campaign_id, "Paused", error=_safe_error(exc))
+                        return
                     remote_id = f"BrowserCompose:u/{sender['gmail_slot']}"
                 else:
                     attachments, inline_attachments = _attachment_payloads(item["attachments"], item["body_html"])
@@ -936,18 +986,51 @@ async def _run_campaign(campaign_id: str) -> None:
                     remote_id = await (create_draft(gmail_token or {}, raw) if mode == "draft" else send_message(gmail_token or {}, raw))
                 store.update_item(item["id"], status="Success", remote_id=remote_id, increment_attempt=True)
                 store.log_operation({**_operation_from_item(current, item, account_label), "remote_id": remote_id, "result": "Success", "error": ""})
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                error = _safe_error(exc)
+                if status in {401, 403, 429} or status >= 500:
+                    # Auth/rate/server errors affect the whole queue. For real sends,
+                    # 5xx responses can also be ambiguous, so do not auto-advance.
+                    item_status = "NeedsReview" if mode == "send" and status >= 500 else "Failed"
+                    result = "Uncertain" if item_status == "NeedsReview" else "Failed"
+                    store.update_item(item["id"], status=item_status, error=error, increment_attempt=True)
+                    store.log_operation({**_operation_from_item(current, item, account_label), "result": result, "error": error})
+                    store.refresh_campaign_counts(campaign_id)
+                    store.set_campaign_status(campaign_id, "Paused", error=error)
+                    return
+                store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
+                store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                error = _safe_error(exc)
+                if mode == "send":
+                    # A lost response does not prove the send failed. Preserve the
+                    # item for explicit review instead of enabling a duplicate retry.
+                    store.update_item(item["id"], status="NeedsReview", error=error, increment_attempt=True)
+                    store.log_operation({**_operation_from_item(current, item, account_label), "result": "Uncertain", "error": error})
+                    store.refresh_campaign_counts(campaign_id)
+                    store.set_campaign_status(campaign_id, "Paused", error="Send outcome is uncertain; inspect Gmail before taking further action. " + error)
+                    return
+                store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
+                store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
             except Exception as exc:
                 error = _safe_error(exc)
                 store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
             store.refresh_campaign_counts(campaign_id)
-            await asyncio.sleep(max(0, int(current.get("throttle_ms", 0))) / 1000)
+            if item_index + 1 < len(items):
+                await asyncio.sleep(max(0, int(current.get("throttle_ms", 0))) / 1000)
 
         final = store.get_campaign(campaign_id)
         if final and final["status"] == "Running":
             store.refresh_campaign_counts(campaign_id)
             final = store.get_campaign(campaign_id)
             store.set_campaign_status(campaign_id, "CompletedWithErrors" if final and final["failed"] else "Completed")
+    except asyncio.CancelledError:
+        current = store.get_campaign(campaign_id)
+        if current and current["status"] == "Running":
+            store.set_campaign_status(campaign_id, "Paused", error="Processing was interrupted; review before resuming.")
+        raise
     except Exception as exc:
         store.set_campaign_status(campaign_id, "Paused", error=_safe_error(exc))
 
@@ -961,8 +1044,8 @@ def _operation_from_item(campaign: dict[str, Any], item: dict[str, Any], account
 
 
 # ---------- common helpers ----------
-async def _verified_google_account(email: str, require_scope: str = GMAIL_SCOPE) -> tuple[dict[str, Any], str]:
-    account = store.get_account(email)
+async def _verified_google_account(email_address: str, require_scope: str = GMAIL_SCOPE) -> tuple[dict[str, Any], str]:
+    account = store.get_account(email_address)
     if not account:
         raise RuntimeError("The selected Google account is not connected.")
     token, client = account
@@ -971,8 +1054,8 @@ async def _verified_google_account(email: str, require_scope: str = GMAIL_SCOPE)
         scope_name = "Google Sheets read-only" if require_scope == SHEETS_SCOPE else "Gmail compose"
         raise RuntimeError(f"This account is missing the {scope_name} permission. Reconnect it with the required access.")
     actual_email = await profile_email(token)
-    if actual_email.casefold() != email.casefold():
-        raise RuntimeError(f"Connected credential belongs to {actual_email}, not {email}.")
+    if actual_email.casefold() != email_address.casefold():
+        raise RuntimeError(f"Connected credential belongs to {actual_email}, not {email_address}.")
     store.save_account(actual_email, token, client)
     return token, actual_email
 
@@ -992,7 +1075,7 @@ def _require_fresh_browser_sender(sender_id: str) -> dict[str, Any]:
     verified = sender.get("verified_at") or ""
     try:
         verified_dt = datetime.fromisoformat(verified)
-    except ValueError:
+    except (ValueError, TypeError):
         verified_dt = datetime.min.replace(tzinfo=timezone.utc)
     if verified_dt.tzinfo is None:
         verified_dt = verified_dt.replace(tzinfo=timezone.utc)
@@ -1037,11 +1120,40 @@ def _normalize_schedule(value: str) -> str:
         raise HTTPException(400, "Scheduled time must include a timezone.")
     parsed = parsed.astimezone(timezone.utc)
     if parsed <= datetime.now(timezone.utc) + timedelta(seconds=5):
-        return ""
+        raise HTTPException(400, "Scheduled time must be at least 5 seconds in the future.")
     return parsed.isoformat(timespec="seconds")
 
 
+def _cleanup_orphan_import_files() -> None:
+    # Import metadata is intentionally process-local. Any file left from an older
+    # process is unreachable and can be removed safely at startup.
+    for path in imports_dir().iterdir():
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def _prune_imports() -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=IMPORT_TTL_HOURS)
+    for import_id, meta in list(imports.items()):
+        try:
+            snapshot_at = datetime.fromisoformat(str(meta.get("snapshot_at") or "").replace("Z", "+00:00"))
+            if snapshot_at.tzinfo is None:
+                snapshot_at = snapshot_at.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            snapshot_at = datetime.min.replace(tzinfo=timezone.utc)
+        if snapshot_at < cutoff or not Path(meta["path"]).exists():
+            try:
+                Path(meta["path"]).unlink(missing_ok=True)
+            except OSError:
+                pass
+            imports.pop(import_id, None)
+
+
 def _import_meta(import_id: str) -> dict[str, Any]:
+    _prune_imports()
     meta = imports.get(import_id)
     if meta is None or not Path(meta["path"]).exists():
         raise HTTPException(404, "Spreadsheet import expired. Load the source again.")
@@ -1064,7 +1176,7 @@ def _require_campaign(campaign_id: str) -> dict[str, Any]:
 
 
 def _oauth_page(success: bool, message: str) -> HTMLResponse:
-    safe = re.sub(r"[<>]", "", message)
+    safe = html.escape(message, quote=True)
     icon = "✓" if success else "!"
     return HTMLResponse(
         f"""<!doctype html><meta charset='utf-8'><title>MailDesk</title>
@@ -1077,6 +1189,13 @@ def _prune_oauth_sessions() -> None:
     cutoff = time.time() - 600
     for key in [key for key, value in oauth_sessions.items() if value.get("created", 0) < cutoff]:
         oauth_sessions.pop(key, None)
+
+
+def _csv_safe(value: Any) -> str:
+    text = "" if value is None else str(value)
+    if text.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
 
 
 def _safe_error(exc: Exception) -> str:
