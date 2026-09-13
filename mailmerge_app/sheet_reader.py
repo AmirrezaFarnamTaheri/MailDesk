@@ -12,6 +12,8 @@ from openpyxl import load_workbook
 
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm", ".csv"}
 MAX_ROWS = 100_000
+MAX_COLUMNS = 2_000
+MAX_CELLS = 2_000_000
 MAX_CSV_FIELD_BYTES = 4 * 1024 * 1024
 MAX_XLSX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
 MAX_XLSX_ENTRIES = 20_000
@@ -79,17 +81,35 @@ def _csv_rows(path: Path) -> list[list[str]]:
     if text is None:
         text = raw.decode("utf-8", errors="replace")
 
+    # Detect common spreadsheet delimiters instead of silently treating a German /
+    # European semicolon CSV as a single column. Sniff only a bounded prefix.
+    try:
+        dialect = csv.Sniffer().sniff(text[:64 * 1024], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+
+    delimiter = getattr(dialect, "delimiter", ",")
+    if raw.count(delimiter.encode("utf-8")) > MAX_CELLS:
+        raise ValueError(f"Spreadsheet exceeds the {MAX_CELLS:,}-cell safety limit.")
+
     # csv.reader must receive the original newline stream. splitlines() corrupts
     # valid quoted fields containing embedded newlines by turning one logical row
-    # into several physical rows.
+    # into several physical rows. Set the intended ceiling exactly; using max()
+    # would allow another library to raise this process-global limit beforehand.
     previous_limit = csv.field_size_limit()
-    csv.field_size_limit(max(previous_limit, MAX_CSV_FIELD_BYTES))
+    csv.field_size_limit(MAX_CSV_FIELD_BYTES)
     rows: list[list[str]] = []
+    cell_count = 0
     try:
-        reader = csv.reader(io.StringIO(text, newline=""))
+        reader = csv.reader(io.StringIO(text, newline=""), dialect=dialect)
         for index, row in enumerate(reader):
             if index >= MAX_ROWS + 100:
                 raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-row safety limit.")
+            if len(row) > MAX_COLUMNS:
+                raise ValueError(f"Spreadsheet row {index + 1} exceeds the {MAX_COLUMNS:,}-column safety limit.")
+            cell_count += len(row)
+            if cell_count > MAX_CELLS:
+                raise ValueError(f"Spreadsheet exceeds the {MAX_CELLS:,}-cell safety limit.")
             rows.append([cell.strip() for cell in row])
     except csv.Error as exc:
         raise ValueError(f"Could not parse CSV: {exc}") from exc
@@ -106,9 +126,15 @@ def _xlsx_rows(path: Path, sheet: str) -> list[list[str]]:
             raise ValueError(f"Worksheet not found: {sheet}")
         ws = wb[sheet]
         rows: list[list[str]] = []
+        cell_count = 0
         for index, row in enumerate(ws.iter_rows(values_only=True)):
             if index >= MAX_ROWS + 100:
                 raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-row safety limit.")
+            if len(row) > MAX_COLUMNS:
+                raise ValueError(f"Spreadsheet row {index + 1} exceeds the {MAX_COLUMNS:,}-column safety limit.")
+            cell_count += len(row)
+            if cell_count > MAX_CELLS:
+                raise ValueError(f"Spreadsheet exceeds the {MAX_CELLS:,}-cell safety limit.")
             rows.append([_display_value(cell) for cell in row])
         return rows
     finally:
