@@ -17,6 +17,8 @@ from cryptography.fernet import Fernet
 
 from .paths import backups_dir, data_dir
 
+ACTIVE_CAMPAIGN_STATUSES = ("Scheduled", "Queued", "Running", "Paused")
+
 
 class SecretBox:
     """Encrypt small local secrets. Uses Windows DPAPI on Windows; Fernet elsewhere."""
@@ -63,24 +65,30 @@ class SecretBox:
     def _fernet(self) -> Fernet:
         if not self._fallback_key_path.exists():
             key = Fernet.generate_key()
+            temporary = self._fallback_key_path.with_name(f".{self._fallback_key_path.name}.{uuid.uuid4().hex}.tmp")
             try:
-                fd = os.open(self._fallback_key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                pass
-            else:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as output:
+                    output.write(key)
+                    output.flush()
+                    os.fsync(output.fileno())
                 try:
-                    with os.fdopen(fd, "wb") as output:
-                        output.write(key)
-                        output.flush()
-                        os.fsync(output.fileno())
-                except Exception:
-                    self._fallback_key_path.unlink(missing_ok=True)
-                    raise
+                    # link() installs the completed key atomically without
+                    # overwriting a key another process may have won the race to
+                    # create. This avoids ever exposing a zero-length final key.
+                    os.link(temporary, self._fallback_key_path)
+                except FileExistsError:
+                    pass
+            finally:
+                temporary.unlink(missing_ok=True)
             try:
                 os.chmod(self._fallback_key_path, 0o600)
             except OSError:
                 pass
-        return Fernet(self._fallback_key_path.read_bytes())
+        key = self._fallback_key_path.read_bytes()
+        if not key:
+            raise RuntimeError("Local encryption key is empty or corrupt.")
+        return Fernet(key)
 
     def encrypt(self, payload: dict[str, Any]) -> str:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -136,8 +144,12 @@ class Store:
                     source.execute("PRAGMA busy_timeout=5000")
                     source.backup(destination)
                 os.replace(temporary, target)
-            except (OSError, sqlite3.Error):
+            except (OSError, sqlite3.Error) as exc:
                 temporary.unlink(missing_ok=True)
+                # A migration backup is a safety boundary, not a best-effort
+                # convenience. Do not mutate an existing database if its recovery
+                # snapshot cannot be created.
+                raise RuntimeError(f"Could not create the startup database backup: {exc}") from exc
         backups = sorted(backups_dir().glob(f"{self.path.stem}-startup-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in backups[7:]:
             try:
@@ -264,9 +276,10 @@ class Store:
             self._ensure_column(db, "operations", "campaign_id", "TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE INDEX IF NOT EXISTS idx_operations_campaign ON operations(campaign_id, id)")
             self._seed(db)
-            # Running means the process died or restarted mid-flight; never silently continue real sends.
+            # Queued/Running work belonged to the previous process's event loop.
+            # Never make it look active after a restart; require explicit review.
             db.execute(
-                "UPDATE campaigns SET status='Paused', last_error='Paused after application restart; review and resume explicitly.' WHERE status='Running'"
+                "UPDATE campaigns SET status='Paused', completed_at='', last_error='Paused after application restart; review and resume explicitly.' WHERE status IN ('Running','Queued')"
             )
 
     def _ensure_column(self, db: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -333,7 +346,8 @@ class Store:
 
     def _decode_template(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
-            row["attachment_ids"] = json.loads(row.get("attachment_ids") or "[]")
+            decoded = json.loads(row.get("attachment_ids") or "[]")
+            row["attachment_ids"] = decoded if isinstance(decoded, list) else []
         except (json.JSONDecodeError, TypeError):
             row["attachment_ids"] = []
         return row
@@ -384,6 +398,15 @@ class Store:
             return None
         return self.secrets.decrypt(row["encrypted_token"]), self.secrets.decrypt(row["encrypted_client"])
 
+    def account_in_use(self, email: str) -> bool:
+        placeholders = ",".join("?" for _ in ACTIVE_CAMPAIGN_STATUSES)
+        with self._db() as db:
+            row = db.execute(
+                f"SELECT 1 FROM campaigns WHERE status IN ({placeholders}) AND mode IN ('draft','send') AND account=? COLLATE NOCASE LIMIT 1",
+                (*ACTIVE_CAMPAIGN_STATUSES, email),
+            ).fetchone()
+        return bool(row)
+
     def delete_account(self, email: str) -> None:
         with self._db() as db:
             db.execute("DELETE FROM gmail_accounts WHERE email=? COLLATE NOCASE", (email,))
@@ -419,6 +442,15 @@ class Store:
         with self._db() as db:
             db.execute("UPDATE browser_senders SET verified_at=?,updated_at=? WHERE id=?", (now, now, sender_id))
 
+    def browser_sender_in_use(self, sender_id: str) -> bool:
+        placeholders = ",".join("?" for _ in ACTIVE_CAMPAIGN_STATUSES)
+        with self._db() as db:
+            row = db.execute(
+                f"SELECT 1 FROM campaigns WHERE status IN ({placeholders}) AND mode='browser' AND browser_sender_id=? LIMIT 1",
+                (*ACTIVE_CAMPAIGN_STATUSES, sender_id),
+            ).fetchone()
+        return bool(row)
+
     def delete_browser_sender(self, sender_id: str) -> None:
         with self._db() as db:
             db.execute("DELETE FROM browser_senders WHERE id=?", (sender_id,))
@@ -442,6 +474,33 @@ class Store:
         with self._db() as db:
             row = db.execute("SELECT * FROM attachments WHERE id=?", (attachment_id,)).fetchone()
         return dict(row) if row else None
+
+    def attachment_in_use(self, attachment_id: str) -> bool:
+        with self._db() as db:
+            templates = db.execute("SELECT attachment_ids FROM templates").fetchall()
+            for row in templates:
+                try:
+                    ids = json.loads(row["attachment_ids"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    ids = []
+                if isinstance(ids, list) and attachment_id in ids:
+                    return True
+
+            placeholders = ",".join("?" for _ in ACTIVE_CAMPAIGN_STATUSES)
+            rows = db.execute(
+                f"""SELECT qi.attachments_json FROM queue_items qi
+                    JOIN campaigns c ON c.id=qi.campaign_id
+                    WHERE c.status IN ({placeholders})""",
+                ACTIVE_CAMPAIGN_STATUSES,
+            ).fetchall()
+            for row in rows:
+                try:
+                    ids = json.loads(row["attachments_json"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    ids = []
+                if isinstance(ids, list) and attachment_id in ids:
+                    return True
+        return False
 
     def delete_attachment(self, attachment_id: str) -> dict[str, Any] | None:
         with self._db() as db:
@@ -517,9 +576,15 @@ class Store:
                 result["items"] = [self._decode_queue_item(dict(item)) for item in items]
         return result
 
+    def get_queue_item(self, campaign_id: str, item_id: int) -> dict[str, Any] | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM queue_items WHERE campaign_id=? AND id=?", (campaign_id, item_id)).fetchone()
+        return self._decode_queue_item(dict(row)) if row else None
+
     def _decode_queue_item(self, item: dict[str, Any]) -> dict[str, Any]:
         try:
-            item["attachments"] = json.loads(item.pop("attachments_json", "[]") or "[]")
+            decoded = json.loads(item.pop("attachments_json", "[]") or "[]")
+            item["attachments"] = decoded if isinstance(decoded, list) else []
         except (json.JSONDecodeError, TypeError):
             item["attachments"] = []
         return item
