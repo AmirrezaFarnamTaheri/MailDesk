@@ -12,8 +12,17 @@ import webbrowser
 import httpx
 import uvicorn
 
-from .instance import acquire_instance_lock
-from .main import APP_VERSION, app
+# Support both normal package imports (console scripts / PyInstaller launcher) and
+# direct source execution via ``python mailmerge_app/desktop.py``. Python puts the
+# package directory itself on sys.path for direct script execution, so add the
+# repository/package parent before using absolute package imports.
+if __package__ in {None, ""}:
+    package_parent = str(Path(__file__).resolve().parent.parent)
+    if package_parent not in sys.path:
+        sys.path.insert(0, package_parent)
+
+from mailmerge_app.instance import acquire_instance_lock
+from mailmerge_app.main import APP_VERSION, app
 
 APP_PORT = 8765
 APP_URL = f"http://127.0.0.1:{APP_PORT}/"
