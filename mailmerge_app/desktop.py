@@ -51,17 +51,30 @@ def main() -> None:
 
     # Headless frozen-EXE smoke path. Import pywebview (a common PyInstaller hidden
     # import failure point), then write a marker that the Windows workflow can
-    # verify after Start-Process -Wait without opening a window or local server.
+    # verify without opening a window or local server. pywebview can initialize
+    # pythonnet/CLR state whose normal interpreter teardown may keep a frozen GUI
+    # process alive on a headless Windows runner. This branch exists only for the
+    # build probe, so after the marker file has been closed we terminate the
+    # interpreter directly and let the PyInstaller parent clean up its one-file
+    # extraction directory.
     if "--build-smoke-test" in args:
         index = args.index("--build-smoke-test")
         if index + 1 >= len(args):
             raise SystemExit("--build-smoke-test requires an output path")
-        import webview  # type: ignore  # noqa: F401
 
         marker = Path(args[index + 1])
         marker.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import webview  # type: ignore  # noqa: F401
+        except BaseException as exc:
+            marker.write_text(
+                f"ERROR: pywebview import failed: {type(exc).__name__}: {exc}",
+                encoding="utf-8",
+            )
+            os._exit(2)
+
         marker.write_text(f"MailDesk {APP_VERSION}", encoding="utf-8")
-        return
+        os._exit(0)
 
     lock = _instance_lock()
     if lock is None:
