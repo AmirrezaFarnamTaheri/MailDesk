@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -12,6 +13,8 @@ from typing import Mapping
 # {{Field}}, {{Field|fallback}}, {{#if Field}}...{{/if}}
 PLACEHOLDER_RE = re.compile(r"{{\s*(?!#if\b|/if\b)([^{}]+?)\s*}}")
 IF_RE = re.compile(r"{{\s*#if\s+([^{}]+?)\s*}}(.*?){{\s*/if\s*}}", re.DOTALL)
+LOCAL_ATOM_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$")
+DOMAIN_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
 @dataclass(slots=True)
@@ -110,13 +113,18 @@ def split_addresses(value: str) -> list[str]:
 
 
 def is_valid_email(address: str) -> bool:
+    # MailDesk intentionally accepts only a conservative RFC 5322 dot-atom local
+    # part. Display-name forms and quoted local parts are rejected so spreadsheet
+    # cells have one unambiguous address representation.
     if not address or any(ch.isspace() for ch in address) or len(address) > 254:
         return False
     _, parsed = parseaddr(address)
     if parsed != address:
         return False
     local, sep, domain = parsed.rpartition("@")
-    if not sep or not local or len(local.encode("utf-8")) > 64 or len(domain) > 253:
+    if not sep or not local or len(local.encode("utf-8")) > 64:
+        return False
+    if not LOCAL_ATOM_RE.fullmatch(local):
         return False
     if "." not in domain or domain.startswith(".") or domain.endswith("."):
         return False
@@ -124,8 +132,17 @@ def is_valid_email(address: str) -> bool:
         ascii_domain = domain.encode("idna").decode("ascii")
     except UnicodeError:
         return False
+    if len(ascii_domain) > 253:
+        return False
     labels = ascii_domain.split(".")
-    return all(label and len(label) <= 63 and not label.startswith("-") and not label.endswith("-") for label in labels)
+    return all(DOMAIN_LABEL_RE.fullmatch(label) is not None for label in labels)
+
+
+def _canonical_hash(parts: list[object]) -> str:
+    # Length-aware JSON encoding avoids delimiter-collision bugs such as
+    # subject='a|b', body='c' hashing like subject='a', body='b|c'.
+    encoded = json.dumps(parts, ensure_ascii=False, separators=(",", ":"), sort_keys=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def message_fingerprint(
@@ -139,7 +156,7 @@ def message_fingerprint(
     body_html: str = "",
     attachments: list[str] | None = None,
 ) -> str:
-    normalized = "|".join(
+    return _canonical_hash(
         [
             mode,
             account.lower().strip(),
@@ -149,10 +166,9 @@ def message_fingerprint(
             subject,
             body,
             body_html,
-            ",".join(sorted(attachments or [])),
+            sorted(attachments or []),
         ]
     )
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def batch_fingerprint(messages: list[Mapping[str, object]]) -> str:
@@ -162,18 +178,21 @@ def batch_fingerprint(messages: list[Mapping[str, object]]) -> str:
         if existing:
             parts.append(existing)
             continue
-        normalized = "|".join([
-            str(item.get("row_number", "")),
-            str(item.get("to", "")).lower().strip(),
-            str(item.get("cc", "")).lower().strip(),
-            str(item.get("bcc", "")).lower().strip(),
-            str(item.get("subject", "")),
-            str(item.get("body", "")),
-            str(item.get("body_html", "")),
-            ",".join(sorted(str(x) for x in (item.get("attachments") or []))),
-        ])
-        parts.append(hashlib.sha256(normalized.encode("utf-8")).hexdigest())
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+        parts.append(
+            _canonical_hash(
+                [
+                    str(item.get("row_number", "")),
+                    str(item.get("to", "")).lower().strip(),
+                    str(item.get("cc", "")).lower().strip(),
+                    str(item.get("bcc", "")).lower().strip(),
+                    str(item.get("subject", "")),
+                    str(item.get("body", "")),
+                    str(item.get("body_html", "")),
+                    sorted(str(x) for x in (item.get("attachments") or [])),
+                ]
+            )
+        )
+    return _canonical_hash(parts)
 
 
 def _split_expression(expression: str) -> tuple[str, str]:
