@@ -1,5 +1,6 @@
 (() => {
   const HTML_EDIT_WARNING = 'HTML version removed because the plain-text message was edited during final review.';
+  const SUBJECT_LINE_ERROR = 'Subject contains a line break.';
   const NO_ROWS_SENTINEL = '__maildesk_no_rows_selected__';
   const QUEUE_DETAIL_ROW_LIMIT = 500;
 
@@ -62,6 +63,19 @@
     updateFinalSummary();
   });
 
+  // A mail Subject header cannot contain CR/LF. Keep final-review edits aligned
+  // with server validation so a newline added after rendering is shown as unsafe
+  // before the user reaches the queue request.
+  const baseCommitReviewEdit = commitReviewEdit;
+  commitReviewEdit = async function commitReviewEditWithSubjectValidation() {
+    const message = state.rendered?.messages?.[state.messageIndex];
+    if (message) {
+      message.errors = (message.errors || []).filter(error => error !== SUBJECT_LINE_ERROR);
+      if (/\r|\n/.test(els.reviewSubject.value)) message.errors.push(SUBJECT_LINE_ERROR);
+    }
+    await baseCommitReviewEdit();
+  };
+
   // Keep corrupt local credentials visible instead of letting one account make
   // the whole Accounts page unusable. The backend marks these records so the user
   // can disconnect and reconnect them safely.
@@ -80,10 +94,11 @@
     if (!state.gmailAccounts.length) els.accountList.innerHTML = '<div class="empty-card">No Google accounts connected yet.</div>';
   };
 
-  // Replace the queue detail renderer so uncertain Gmail outcomes have an explicit
-  // audited resolution path. Large campaigns are deliberately not expanded into
-  // thousands of DOM rows at once: that can freeze the desktop WebView. Always
-  // include NeedsReview rows even when they fall outside the normal detail window.
+  // Fetch only compact queue-item summaries. The original UI capped DOM rows but
+  // still downloaded every full message body/HTML payload first, so a 10k-message
+  // campaign could allocate a huge JSON response before that cap had any effect.
+  // The backend detail endpoint returns the first bounded window plus bounded
+  // NeedsReview rows, preserving safety actions without moving message bodies.
   toggleCampaignDetails = async function toggleCampaignDetailsWithResolution(card, id) {
     const existing = q('.queue-items', card);
     if (existing) {
@@ -91,19 +106,20 @@
       return;
     }
     try {
-      const campaign = await api(`/api/campaigns/${id}`);
-      const allItems = Array.isArray(campaign.items) ? campaign.items : [];
-      const normalItems = allItems.slice(0, QUEUE_DETAIL_ROW_LIMIT);
-      const includedIds = new Set(normalItems.map(item => item.id));
-      const reviewItems = allItems.filter(item => item.status === 'NeedsReview' && !includedIds.has(item.id));
-      const visibleItems = [...normalItems, ...reviewItems];
+      const campaign = await api(`/api/campaigns/${encodeURIComponent(id)}/detail?limit=${QUEUE_DETAIL_ROW_LIMIT}&needs_review_limit=${QUEUE_DETAIL_ROW_LIMIT}`);
+      const visibleItems = Array.isArray(campaign.items) ? campaign.items : [];
+      const totalItems = Number(campaign.total || 0);
+      const reviewTotal = Number(campaign.needs_review_total || 0);
 
       const wrap = document.createElement('div');
       wrap.className = 'table-scroll queue-items';
-      if (allItems.length > visibleItems.length) {
+      if (totalItems > visibleItems.length) {
         const notice = document.createElement('div');
         notice.className = 'callout';
-        notice.textContent = `Showing ${visibleItems.length.toLocaleString()} of ${allItems.length.toLocaleString()} items to keep this view responsive. Safety-review items are always included.`;
+        const reviewNote = reviewTotal > QUEUE_DETAIL_ROW_LIMIT
+          ? ` Showing ${QUEUE_DETAIL_ROW_LIMIT.toLocaleString()} of ${reviewTotal.toLocaleString()} safety-review items.`
+          : ' Safety-review items are included in the bounded detail response.';
+        notice.textContent = `Showing ${visibleItems.length.toLocaleString()} compact rows from ${totalItems.toLocaleString()} campaign items to keep this view responsive.${reviewNote}`;
         wrap.append(notice);
       }
 
