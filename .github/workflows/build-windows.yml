@@ -49,9 +49,9 @@ jobs:
         shell: pwsh
         run: node --check mailmerge_app/static/app.js
 
-      - name: Install Inno Setup
+      - name: Install pinned Inno Setup
         shell: pwsh
-        run: choco install innosetup --yes --no-progress
+        run: choco install innosetup --version=6.7.1 --yes --no-progress --allow-downgrade
 
       - name: Prepare optional Authenticode certificate
         if: env.MAILMERGE_SIGN_CERT_BASE64 != ''
