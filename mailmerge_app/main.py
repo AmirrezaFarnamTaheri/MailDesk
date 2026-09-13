@@ -52,6 +52,9 @@ APP_VERSION = "0.2.0"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_OAUTH_CLIENT_BYTES = 2 * 1024 * 1024
+ATTACHMENT_CACHE_MAX_ENTRIES = 8
+ATTACHMENT_CACHE_MAX_ITEM_BYTES = 8 * 1024 * 1024
 BLOCKED_ATTACHMENT_EXTENSIONS = {".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".js", ".jar"}
 BROWSER_VERIFICATION_MINUTES = 30
 IMPORT_TTL_HOURS = 24
@@ -317,9 +320,10 @@ async def attachment_content(attachment_id: str) -> FileResponse:
     item = store.get_attachment(attachment_id)
     if not item:
         raise HTTPException(404, "Attachment not found.")
-    path = attachments_dir() / item["stored_name"]
-    if not path.exists():
-        raise HTTPException(404, "Attachment file is missing.")
+    try:
+        path = _attachment_file(item)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return FileResponse(path, media_type=item.get("mime_type") or "application/octet-stream")
 
 
@@ -353,7 +357,7 @@ async def import_sheet(file: UploadFile = File(...)) -> dict[str, Any]:
                 raise HTTPException(413, "Spreadsheet is larger than 25 MB.")
             output.write(chunk)
     try:
-        sheets = list_sheets(path)
+        sheets = await asyncio.to_thread(list_sheets, path)
     except Exception as exc:
         path.unlink(missing_ok=True)
         raise HTTPException(400, f"Could not read spreadsheet: {_safe_error(exc)}") from exc
@@ -424,7 +428,7 @@ async def import_info(import_id: str) -> dict[str, Any]:
 async def import_preview(import_id: str, sheet: str = Query(...), header_row: int | None = Query(default=None, ge=1, le=1000)) -> dict[str, Any]:
     path = _import_path(import_id)
     try:
-        headers, rows, detected = table(path, sheet, header_row)
+        headers, rows, detected, profiles, suggestions = await asyncio.to_thread(_preview_source, path, sheet, header_row)
     except Exception as exc:
         raise HTTPException(400, _safe_error(exc)) from exc
     return {
@@ -433,8 +437,8 @@ async def import_preview(import_id: str, sheet: str = Query(...), header_row: in
         "total_rows": len(rows),
         "rows": rows[:100],
         "row_numbers": [row.get("_row", "") for row in rows],
-        "column_profiles": column_profiles(headers, rows),
-        "suggestions": suggest_mappings(headers, rows),
+        "column_profiles": profiles,
+        "suggestions": suggestions,
         "source": _public_import(_import_meta(import_id)),
     }
 
@@ -443,7 +447,7 @@ async def import_preview(import_id: str, sheet: str = Query(...), header_row: in
 async def render_messages(payload: RenderRequest) -> dict[str, Any]:
     path = _import_path(payload.import_id)
     try:
-        headers, rows, detected = table(path, payload.sheet, payload.header_row)
+        headers, rows, detected = await asyncio.to_thread(table, path, payload.sheet, payload.header_row)
     except Exception as exc:
         raise HTTPException(400, _safe_error(exc)) from exc
     _validate_mapping_columns(payload, headers)
@@ -468,12 +472,13 @@ async def render_messages(payload: RenderRequest) -> dict[str, Any]:
     if payload.limit:
         rows = rows[: payload.limit]
 
-    attachment_by_name = {item["name"].casefold(): item["id"] for item in reversed(store.list_attachments())}
-    messages = [_render_row(payload, row, attachment_by_name) for row in rows]
-    _mark_duplicate_recipients(messages)
+    attachment_items = store.list_attachments()
+    attachment_catalog = {item["id"]: item for item in attachment_items}
+    attachment_by_name = {item["name"].casefold(): item["id"] for item in reversed(attachment_items)}
+    messages = await asyncio.to_thread(_render_rows, payload, rows, attachment_by_name, attachment_catalog)
     invalid = sum(bool(message["errors"]) for message in messages)
     warnings = sum(bool(message["warnings"]) for message in messages)
-    batch_id = batch_fingerprint(messages)
+    batch_id = await asyncio.to_thread(batch_fingerprint, messages)
     return {
         "headers": headers,
         "header_row": detected,
@@ -489,13 +494,14 @@ async def render_messages(payload: RenderRequest) -> dict[str, Any]:
 
 @app.post("/api/batch-id")
 async def batch_id(payload: BatchHashRequest) -> dict[str, str]:
-    return {"batch_id": batch_fingerprint([message.model_dump() for message in payload.messages])}
+    fingerprint = await asyncio.to_thread(batch_fingerprint, [message.model_dump() for message in payload.messages])
+    return {"batch_id": fingerprint}
 
 
 # ---------- browser profiles and Gmail account slots ----------
 @app.get("/api/browser-profiles")
 async def browser_profiles() -> list[dict[str, object]]:
-    return discover_profiles()
+    return await asyncio.to_thread(discover_profiles)
 
 
 @app.get("/api/browser-senders")
@@ -509,7 +515,7 @@ async def browser_sender_save(sender_id: str, payload: BrowserSenderPayload) -> 
         raise HTTPException(400, "Browser sender id does not match the route.")
     if not is_valid_email(payload.expected_email):
         raise HTTPException(400, "Expected sender email is invalid.")
-    profiles = discover_profiles()
+    profiles = await asyncio.to_thread(discover_profiles)
     selected = next((p for p in profiles if p["browser_id"] == payload.browser_id and p["profile_dir"] == payload.profile_dir), None)
     if selected is None:
         raise HTTPException(400, "The selected browser profile is not currently available.")
@@ -564,9 +570,11 @@ async def accounts_list() -> list[dict[str, Any]]:
 
 @app.post("/api/accounts/google/start")
 async def google_start(request: Request, client_secret: UploadFile = File(...), include_sheets: bool = Form(True)) -> dict[str, str]:
-    raw = await client_secret.read(2 * 1024 * 1024)
+    raw = await client_secret.read(MAX_OAUTH_CLIENT_BYTES + 1)
     if not raw:
         raise HTTPException(400, "OAuth client JSON is empty.")
+    if len(raw) > MAX_OAUTH_CLIENT_BYTES:
+        raise HTTPException(413, "OAuth client JSON is larger than 2 MB.")
     try:
         client = parse_client_secret(raw)
     except ValueError as exc:
@@ -609,11 +617,11 @@ async def accounts_delete(email: str) -> dict[str, bool]:
 # ---------- campaign queue / scheduling ----------
 @app.post("/api/campaigns")
 async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
-    _ensure_messages_safe(payload.messages)
+    await asyncio.to_thread(_ensure_messages_safe, payload.messages)
     max_batch = int(store.get_setting("max_batch_size", "500") or "500")
     if len(payload.messages) > max_batch:
         raise HTTPException(400, f"Batch has {len(payload.messages)} messages; current safety limit is {max_batch}.")
-    expected_batch = batch_fingerprint([m.model_dump() for m in payload.messages])
+    expected_batch = await asyncio.to_thread(batch_fingerprint, [m.model_dump() for m in payload.messages])
     if payload.batch_id != expected_batch:
         raise HTTPException(409, "Rendered batch changed. Review the latest batch before processing.")
 
@@ -645,7 +653,8 @@ async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
             message.body_html, message.attachments,
         )
         messages.append(item)
-    campaign = store.create_campaign(
+    campaign = await asyncio.to_thread(
+        store.create_campaign,
         {
             "name": payload.name,
             "source_name": payload.source_name,
@@ -806,12 +815,33 @@ async def settings_save(payload: SettingsPayload) -> dict[str, int]:
 
 @app.post("/api/backup")
 async def backup_database() -> dict[str, str]:
-    path = store.backup()
+    path = await asyncio.to_thread(store.backup)
     return {"backup": str(path)}
 
 
 # ---------- rendering helpers ----------
-def _render_row(payload: RenderRequest, row: dict[str, str], attachment_by_name: dict[str, str]) -> dict[str, Any]:
+def _preview_source(path: Path, sheet: str, header_row: int | None) -> tuple[list[str], list[dict[str, str]], int, list[dict[str, Any]], dict[str, str]]:
+    headers, rows, detected = table(path, sheet, header_row)
+    return headers, rows, detected, column_profiles(headers, rows), suggest_mappings(headers, rows)
+
+
+def _render_rows(
+    payload: RenderRequest,
+    rows: list[dict[str, str]],
+    attachment_by_name: dict[str, str],
+    attachment_catalog: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    messages = [_render_row(payload, row, attachment_by_name, attachment_catalog) for row in rows]
+    _mark_duplicate_recipients(messages)
+    return messages
+
+
+def _render_row(
+    payload: RenderRequest,
+    row: dict[str, str],
+    attachment_by_name: dict[str, str],
+    attachment_catalog: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     working = {key: (value.strip() if payload.trim_values and isinstance(value, str) else value) for key, value in row.items()}
     row_number = int(row.get("_row", "0") or 0)
     subject = render_text(payload.subject, working, row_number)
@@ -860,10 +890,11 @@ def _render_row(payload: RenderRequest, row: dict[str, str], attachment_by_name:
         warnings.append("Body is blank.")
 
     attachment_ids = list(dict.fromkeys(payload.attachment_ids))
+    catalog = attachment_catalog if attachment_catalog is not None else {item["id"]: item for item in store.list_attachments()}
     if payload.attachment_column:
         raw_attachments = str(working.get(payload.attachment_column, ""))
         for value in [part.strip() for part in re.split(r"[;,\n]+", raw_attachments) if part.strip()]:
-            if store.get_attachment(value):
+            if value in catalog:
                 attachment_ids.append(value)
             elif value.casefold() in attachment_by_name:
                 attachment_ids.append(attachment_by_name[value.casefold()])
@@ -871,7 +902,7 @@ def _render_row(payload: RenderRequest, row: dict[str, str], attachment_by_name:
                 errors.append(f"Attachment not found in app library: {value}")
     attachment_ids = list(dict.fromkeys(attachment_ids))
     try:
-        _validate_attachment_ids(attachment_ids)
+        _validate_attachment_ids(attachment_ids, catalog)
     except HTTPException as exc:
         errors.append(str(exc.detail))
 
@@ -909,6 +940,7 @@ def _ensure_messages_safe(messages: list[MessagePayload]) -> None:
     unsafe = [message.row_number for message in messages if message.errors]
     if unsafe:
         raise HTTPException(400, "Fix validation errors before processing rows: " + ", ".join(unsafe[:12]))
+    attachment_catalog = {item["id"]: item for item in store.list_attachments()}
     for message in messages:
         recipients = split_addresses(message.to)
         if not recipients:
@@ -916,42 +948,85 @@ def _ensure_messages_safe(messages: list[MessagePayload]) -> None:
         for address in recipients + split_addresses(message.cc) + split_addresses(message.bcc):
             if not is_valid_email(address):
                 raise HTTPException(400, f"Invalid email address in row {message.row_number}: {address}")
-        _validate_attachment_ids(message.attachments)
+        _validate_attachment_ids(message.attachments, attachment_catalog)
 
 
-def _validate_attachment_ids(ids: list[str]) -> None:
+def _attachment_file(item: dict[str, Any]) -> Path:
+    base = attachments_dir().resolve()
+    stored_name = str(item.get("stored_name") or "")
+    component = Path(stored_name)
+    if not stored_name or component.is_absolute() or component.name != stored_name:
+        raise RuntimeError("Attachment storage path is invalid. Remove and re-add the attachment.")
+    path = base / stored_name
+    try:
+        if path.is_symlink():
+            raise RuntimeError("Attachment file was replaced by a symbolic link. Remove and re-add it.")
+        resolved = path.resolve(strict=True)
+        if resolved.parent != base or not resolved.is_file():
+            raise RuntimeError("Attachment file is outside the MailDesk attachment store.")
+        actual_size = resolved.stat().st_size
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Attachment file is missing: {item.get('name') or stored_name}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Attachment file could not be verified: {item.get('name') or stored_name}") from exc
+    expected_size = int(item.get("size") or 0)
+    if actual_size != expected_size:
+        raise RuntimeError(f"Attachment file changed after it was added: {item.get('name') or stored_name}. Remove and re-add it.")
+    return resolved
+
+
+def _validate_attachment_ids(ids: list[str], catalog: dict[str, dict[str, Any]] | None = None) -> None:
     total = 0
-    missing = []
+    missing: list[str] = []
+    attachment_catalog = catalog if catalog is not None else {item["id"]: item for item in store.list_attachments()}
     for attachment_id in ids:
-        item = store.get_attachment(attachment_id)
-        if not item or not (attachments_dir() / item["stored_name"]).exists():
+        item = attachment_catalog.get(attachment_id)
+        if not item:
             missing.append(attachment_id)
-        else:
-            total += int(item["size"])
+            continue
+        try:
+            _attachment_file(item)
+        except RuntimeError:
+            missing.append(attachment_id)
+            continue
+        total += int(item["size"])
     if missing:
-        raise HTTPException(400, "Missing attachment(s): " + ", ".join(missing[:8]))
+        raise HTTPException(400, "Missing or changed attachment(s): " + ", ".join(missing[:8]))
     if total > 24 * 1024 * 1024:
         raise HTTPException(400, "Selected attachments exceed the 24 MB pre-encoding safety limit.")
 
 
 def _attachment_payloads(
-    ids: list[str], body_html: str = ""
+    ids: list[str],
+    body_html: str = "",
+    cache: dict[str, tuple[str, bytes, str | None]] | None = None,
+    catalog: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[tuple[str, bytes, str | None]], list[tuple[str, str, bytes, str | None]]]:
     regular: list[tuple[str, bytes, str | None]] = []
     inline: list[tuple[str, str, bytes, str | None]] = []
+    attachment_catalog = catalog if catalog is not None else {item["id"]: item for item in store.list_attachments()}
     for attachment_id in ids:
-        item = store.get_attachment(attachment_id)
-        if not item:
-            raise RuntimeError(f"Attachment disappeared: {attachment_id}")
-        path = attachments_dir() / item["stored_name"]
-        if not path.is_file():
-            raise RuntimeError(f"Attachment file disappeared: {item['name']}")
-        payload = path.read_bytes()
-        mime_type = item.get("mime_type") or mimetypes.guess_type(item["name"])[0]
-        if f"cid:{attachment_id}" in (body_html or "") and str(mime_type or "").startswith("image/"):
-            inline.append((attachment_id, item["name"], payload, mime_type))
+        cached = cache.get(attachment_id) if cache is not None else None
+        if cached is not None:
+            name, payload, mime_type = cached
         else:
-            regular.append((item["name"], payload, mime_type))
+            item = attachment_catalog.get(attachment_id)
+            if not item:
+                raise RuntimeError(f"Attachment disappeared: {attachment_id}")
+            path = _attachment_file(item)
+            payload = path.read_bytes()
+            name = item["name"]
+            mime_type = item.get("mime_type") or mimetypes.guess_type(name)[0]
+            if (
+                cache is not None
+                and len(payload) <= ATTACHMENT_CACHE_MAX_ITEM_BYTES
+                and len(cache) < ATTACHMENT_CACHE_MAX_ENTRIES
+            ):
+                cache[attachment_id] = (name, payload, mime_type)
+        if f"cid:{attachment_id}" in (body_html or "") and str(mime_type or "").startswith("image/"):
+            inline.append((attachment_id, name, payload, mime_type))
+        else:
+            regular.append((name, payload, mime_type))
     return regular, inline
 
 
@@ -999,6 +1074,9 @@ async def _run_campaign_locked(campaign_id: str) -> None:
     account_label = campaign.get("account", "")
     browser_profile: dict[str, Any] | None = None
     gmail_token: dict[str, Any] | None = None
+    gmail_http: httpx.AsyncClient | None = None
+    attachment_cache: dict[str, tuple[str, bytes, str | None]] = {}
+    attachment_catalog = {item["id"]: item for item in store.list_attachments()}
     try:
         if mode == "browser":
             sender = _require_fresh_browser_sender(campaign["browser_sender_id"])
@@ -1007,6 +1085,9 @@ async def _run_campaign_locked(campaign_id: str) -> None:
         elif mode in {"draft", "send"}:
             gmail_token, actual = await _verified_google_account(campaign["account"], require_scope=GMAIL_SCOPE)
             account_label = actual
+            # One pool per campaign avoids repeated DNS/TLS/socket setup for every
+            # message while keeping the client's lifetime explicit and bounded.
+            gmail_http = httpx.AsyncClient(timeout=30)
         store.set_campaign_status(campaign_id, "Running")
 
         items = store.queue_items(campaign_id)
@@ -1038,12 +1119,25 @@ async def _run_campaign_locked(campaign_id: str) -> None:
                         return
                     remote_id = f"BrowserCompose:u/{sender['gmail_slot']}"
                 else:
-                    attachments, inline_attachments = _attachment_payloads(item["attachments"], item["body_html"])
-                    raw = build_raw_message(
-                        item["recipient"], item["subject"], item["body"], item["cc"], item["bcc"],
-                        item["body_html"], attachments, inline_attachments
+                    attachments, inline_attachments = await asyncio.to_thread(
+                        _attachment_payloads,
+                        item["attachments"],
+                        item["body_html"],
+                        attachment_cache,
+                        attachment_catalog,
                     )
-                    remote_id = await (create_draft(gmail_token or {}, raw) if mode == "draft" else send_message(gmail_token or {}, raw))
+                    raw = await asyncio.to_thread(
+                        build_raw_message,
+                        item["recipient"], item["subject"], item["body"], item["cc"], item["bcc"],
+                        item["body_html"], attachments, inline_attachments,
+                    )
+                    if gmail_http is None:
+                        raise RuntimeError("Gmail HTTP client was not initialized.")
+                    remote_id = await (
+                        create_draft(gmail_token or {}, raw, http=gmail_http)
+                        if mode == "draft"
+                        else send_message(gmail_token or {}, raw, http=gmail_http)
+                    )
                 store.update_item(item["id"], status="Success", remote_id=remote_id, increment_attempt=True)
                 store.log_operation({**_operation_from_item(current, item, account_label), "remote_id": remote_id, "result": "Success", "error": ""})
             except httpx.HTTPStatusError as exc:
@@ -1101,6 +1195,12 @@ async def _run_campaign_locked(campaign_id: str) -> None:
         raise
     except Exception as exc:
         store.set_campaign_status(campaign_id, "Paused", error=_safe_error(exc))
+    finally:
+        if gmail_http is not None:
+            try:
+                await gmail_http.aclose()
+            except Exception:
+                pass
 
 
 def _operation_from_item(campaign: dict[str, Any], item: dict[str, Any], account: str) -> dict[str, Any]:
