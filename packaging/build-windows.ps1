@@ -75,12 +75,9 @@ function Test-FrozenArtifact([string]$Executable) {
         $stream.Dispose()
     }
 
-    # Do not execute the one-file GUI bundle on a headless hosted runner. Its
-    # bootloader must extract the bundled pythonnet/WebView2 payload before Python
-    # code can run, which is slow/unreliable under runner AV scanning and produced
-    # false startup timeouts. Inspect the actual PyInstaller CArchive recursively
-    # instead; pyi-archive_viewer is shipped by the same PyInstaller installation
-    # that produced this executable.
+    # Inspect the produced one-file CArchive before executing it. This catches
+    # missing hidden modules/native payloads with precise diagnostics and avoids
+    # conflating archive completeness with runtime bootstrap behavior.
     $archiveViewer = Join-Path $Root '.venv-build\Scripts\pyi-archive_viewer.exe'
     if (-not (Test-Path -LiteralPath $archiveViewer)) {
         throw 'PyInstaller archive viewer is missing from the build environment.'
@@ -98,6 +95,8 @@ function Test-FrozenArtifact([string]$Executable) {
     $manifest = ($archiveOutput + "`n" + $tocText).Replace('\', '/')
 
     $requiredEntries = @(
+        'mailmerge_app.desktop',
+        'mailmerge_app.main',
         'webview',
         'pythonnet',
         'clr_loader',
@@ -117,7 +116,7 @@ function Test-FrozenArtifact([string]$Executable) {
         throw 'PyInstaller warning report was not produced.'
     }
     $warnings = Get-Content -LiteralPath $warningPath -Raw
-    foreach ($module in @('webview', 'pythonnet', 'clr_loader')) {
+    foreach ($module in @('mailmerge_app.desktop', 'mailmerge_app.main', 'webview', 'pythonnet', 'clr_loader')) {
         $plainMissing = "missing module named $module"
         $quotedMissing = "missing module named '$module'"
         if ($warnings.IndexOf($plainMissing, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
@@ -127,6 +126,58 @@ function Test-FrozenArtifact([string]$Executable) {
     }
 
     Write-Host "Frozen artifact integrity verified: $($info.Length) bytes"
+}
+
+function Stop-ProcessTree([Diagnostics.Process]$Process) {
+    try {
+        if ($Process.HasExited) { return }
+        & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+    }
+    catch {
+        try { $Process.Kill($true) } catch { }
+    }
+}
+
+function Invoke-FrozenBootstrapSmoke([string]$Executable, [string]$ExpectedVersion, [int]$TimeoutSeconds = 90) {
+    # Use a relative marker argument so the command line stays safe even when the
+    # checkout path contains spaces. build-windows.ps1 already sets cwd to $Root.
+    $markerRelative = "dist\maildesk-bootstrap-smoke-$PID.txt"
+    $marker = Join-Path $Root $markerRelative
+    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+
+    $process = Start-Process -FilePath $Executable -ArgumentList @('--build-smoke-test', $markerRelative) -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    try {
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (Test-Path -LiteralPath $marker) {
+                $detail = (Get-Content -LiteralPath $marker -Raw).Trim()
+                if ([string]::IsNullOrWhiteSpace($detail)) {
+                    Start-Sleep -Milliseconds 100
+                    continue
+                }
+                if ($detail.StartsWith('ERROR:')) {
+                    throw "Frozen executable bootstrap reported an error: $detail"
+                }
+                $expected = "MailDesk $ExpectedVersion"
+                if ($detail -ne $expected) {
+                    throw "Unexpected frozen bootstrap marker. Expected '$expected', got '$detail'."
+                }
+                Write-Host "Frozen executable bootstrap verified: $detail"
+                return
+            }
+
+            if ($process.HasExited) {
+                throw "Frozen executable exited with code $($process.ExitCode) before completing its bootstrap smoke test."
+            }
+            Start-Sleep -Milliseconds 200
+        }
+        throw "Frozen executable did not complete its bootstrap smoke test within $TimeoutSeconds seconds."
+    }
+    finally {
+        Stop-ProcessTree $process
+        $process.Dispose()
+        Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Resolve-InnoCompiler {
@@ -160,6 +211,7 @@ function Resolve-InnoCompiler {
 }
 
 Test-FrozenArtifact $Exe
+Invoke-FrozenBootstrapSmoke -Executable $Exe -ExpectedVersion $Version
 Sign-Artifact $Exe
 
 $Artifacts = [Collections.Generic.List[string]]::new()
