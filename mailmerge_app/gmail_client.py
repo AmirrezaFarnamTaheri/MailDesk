@@ -20,6 +20,14 @@ GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 
 
+class GoogleOutcomeUncertainError(RuntimeError):
+    """A Google mutation returned success but its resulting object could not be verified.
+
+    Callers must not blindly replay the operation: the remote side may already have
+    completed it even though the response body is unusable or missing its identifier.
+    """
+
+
 def parse_client_secret(document: bytes) -> dict[str, str]:
     try:
         parsed = json.loads(document.decode("utf-8-sig"))
@@ -111,7 +119,11 @@ async def profile_email(token: dict[str, Any]) -> str:
     async with httpx.AsyncClient(timeout=30) as http:
         response = await http.get(f"{GMAIL_BASE}/profile", headers=_auth_header(token))
         response.raise_for_status()
-        return str(response.json()["emailAddress"])
+        payload = response.json()
+        email_address = payload.get("emailAddress") if isinstance(payload, dict) else None
+        if not isinstance(email_address, str) or not email_address.strip():
+            raise RuntimeError("Google Gmail profile response did not include an email address.")
+        return email_address.strip()
 
 
 def token_has_scope(token: dict[str, Any], scope: str) -> bool:
@@ -170,43 +182,104 @@ def build_raw_message(
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
 
 
-async def create_draft(token: dict[str, Any], raw_message: str) -> str:
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.post(
-            f"{GMAIL_BASE}/drafts",
-            headers={**_auth_header(token), "Content-Type": "application/json"},
-            json={"message": {"raw": raw_message}},
-        )
-        response.raise_for_status()
-        return str(response.json().get("id", ""))
+async def create_draft(
+    token: dict[str, Any],
+    raw_message: str,
+    *,
+    http: httpx.AsyncClient | None = None,
+) -> str:
+    return await _gmail_mutation(
+        token,
+        f"{GMAIL_BASE}/drafts",
+        {"message": {"raw": raw_message}},
+        operation="draft creation",
+        http=http,
+    )
 
 
-async def send_message(token: dict[str, Any], raw_message: str) -> str:
+async def send_message(
+    token: dict[str, Any],
+    raw_message: str,
+    *,
+    http: httpx.AsyncClient | None = None,
+) -> str:
     # Deliberately do not blindly retry this POST: after a timeout or connection
     # loss the server may already have accepted the message, and an automatic
     # replay could send a duplicate email.
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.post(
-            f"{GMAIL_BASE}/messages/send",
+    return await _gmail_mutation(
+        token,
+        f"{GMAIL_BASE}/messages/send",
+        {"raw": raw_message},
+        operation="send",
+        http=http,
+    )
+
+
+async def _gmail_mutation(
+    token: dict[str, Any],
+    url: str,
+    payload: dict[str, Any],
+    *,
+    operation: str,
+    http: httpx.AsyncClient | None = None,
+) -> str:
+    owns_client = http is None
+    client = http or httpx.AsyncClient(timeout=30)
+    try:
+        response = await client.post(
+            url,
             headers={**_auth_header(token), "Content-Type": "application/json"},
-            json={"raw": raw_message},
+            json=payload,
+            timeout=30,
         )
         response.raise_for_status()
-        return str(response.json().get("id", ""))
+        # A 2xx response means Google may already have committed the mutation. If
+        # its body is malformed or the returned id is missing, replaying the POST
+        # would risk a duplicate message/draft. Surface this as an explicitly
+        # uncertain outcome so the queue can require human verification instead.
+        try:
+            decoded = response.json()
+        except (ValueError, TypeError) as exc:
+            raise GoogleOutcomeUncertainError(
+                f"Gmail {operation} returned success but its response could not be verified."
+            ) from exc
+        remote_id = decoded.get("id") if isinstance(decoded, dict) else None
+        if not isinstance(remote_id, str) or not remote_id.strip():
+            raise GoogleOutcomeUncertainError(
+                f"Gmail {operation} returned success without a verifiable remote id."
+            )
+        return remote_id.strip()
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
-async def google_sheet_metadata(token: dict[str, Any], spreadsheet_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.get(
+async def google_sheet_metadata(
+    token: dict[str, Any],
+    spreadsheet_id: str,
+    *,
+    http: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    owns_client = http is None
+    client = http or httpx.AsyncClient(timeout=60)
+    try:
+        response = await client.get(
             f"{SHEETS_BASE}/{spreadsheet_id}",
             params={
                 "includeGridData": "false",
                 "fields": "properties.title,sheets.properties(title,sheetType,gridProperties)",
             },
             headers=_auth_header(token),
+            timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Google Sheets returned invalid spreadsheet metadata.")
+        return payload
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 async def google_sheet_values(
@@ -215,6 +288,8 @@ async def google_sheet_values(
     sheet_title: str,
     start_row: int | None = None,
     end_row: int | None = None,
+    *,
+    http: httpx.AsyncClient | None = None,
 ) -> list[list[Any]]:
     # A1 notation escapes apostrophes inside quoted sheet names by doubling them.
     # Without this, titles such as O'Brien produce an invalid range.
@@ -225,17 +300,26 @@ async def google_sheet_values(
             raise ValueError("Google Sheet row range is invalid.")
         a1_range += f"!{start_row}:{end_row}"
     range_name = quote(a1_range, safe="")
-    async with httpx.AsyncClient(timeout=60) as http:
-        response = await http.get(
+    owns_client = http is None
+    client = http or httpx.AsyncClient(timeout=60)
+    try:
+        response = await client.get(
             f"{SHEETS_BASE}/{spreadsheet_id}/values/{range_name}",
             params={"majorDimension": "ROWS", "valueRenderOption": "FORMATTED_VALUE"},
             headers=_auth_header(token),
+            timeout=60,
         )
         response.raise_for_status()
-        values = response.json().get("values", [])
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Google Sheets returned an invalid values payload.")
+        values = payload.get("values", [])
         if not isinstance(values, list):
             raise ValueError("Google Sheets returned an invalid values payload.")
         return values
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 def spreadsheet_id_from_url(value: str) -> str:
