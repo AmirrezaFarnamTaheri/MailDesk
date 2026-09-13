@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlencode
 
+MAX_BROWSER_COMPOSE_URL_CHARS = 24_000
+
 
 def _first_existing(paths: list[Path | None]) -> Path | None:
     for path in paths:
@@ -120,7 +122,17 @@ def compose_url(
         values["cc"] = cc
     if bcc:
         values["bcc"] = bcc
-    return gmail_base_url(gmail_slot) + "?" + urlencode(values)
+    url = gmail_base_url(gmail_slot) + "?" + urlencode(values)
+    # Browser mode passes this URL through the OS process command line. Windows'
+    # CreateProcess limit is roughly 32K characters for the entire command. Keep a
+    # conservative margin for the executable/profile arguments and quoting so a
+    # large body fails predictably instead of producing an opaque launch failure.
+    if len(url) > MAX_BROWSER_COMPOSE_URL_CHARS:
+        raise ValueError(
+            "Browser compose content is too large for a reliable browser launch. "
+            "Use Gmail drafts/send mode or shorten this message."
+        )
+    return url
 
 
 def launch_url(profile: dict[str, object], url: str) -> None:
