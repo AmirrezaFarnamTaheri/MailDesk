@@ -18,6 +18,12 @@ from cryptography.fernet import Fernet
 from .paths import backups_dir, data_dir
 
 ACTIVE_CAMPAIGN_STATUSES = ("Scheduled", "Queued", "Running", "Paused")
+_AUDIT_STATUS_TO_RESULT = {
+    "Success": "Success",
+    "Failed": "Failed",
+    "Skipped": "Skipped",
+    "NeedsReview": "Uncertain",
+}
 
 
 class SecretBox:
@@ -272,6 +278,16 @@ class Store:
                     updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_queue_campaign_status ON queue_items(campaign_id, status, ordinal);
+                CREATE TABLE IF NOT EXISTS operation_outbox (
+                    item_id INTEGER PRIMARY KEY REFERENCES queue_items(id) ON DELETE CASCADE,
+                    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    fingerprint TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    remote_id TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_operation_outbox_fingerprint_status ON operation_outbox(fingerprint, status);
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -312,6 +328,32 @@ class Store:
                             + CASE WHEN NEW.status='Skipped' THEN 1 ELSE 0 END)
                     WHERE id=NEW.campaign_id;
                 END;
+
+                DROP TRIGGER IF EXISTS trg_queue_items_operation_outbox;
+                CREATE TRIGGER trg_queue_items_operation_outbox
+                AFTER UPDATE OF status ON queue_items
+                WHEN OLD.status <> NEW.status
+                     AND NEW.status IN ('Success','Failed','Skipped','NeedsReview')
+                BEGIN
+                    INSERT INTO operation_outbox(item_id,campaign_id,fingerprint,status,remote_id,error,created_at)
+                    VALUES(NEW.id,NEW.campaign_id,NEW.fingerprint,NEW.status,NEW.remote_id,NEW.error,NEW.updated_at)
+                    ON CONFLICT(item_id) DO UPDATE SET
+                        campaign_id=excluded.campaign_id,
+                        fingerprint=excluded.fingerprint,
+                        status=excluded.status,
+                        remote_id=excluded.remote_id,
+                        error=excluded.error,
+                        created_at=excluded.created_at;
+                END;
+
+                DROP TRIGGER IF EXISTS trg_queue_items_operation_outbox_clear;
+                CREATE TRIGGER trg_queue_items_operation_outbox_clear
+                AFTER UPDATE OF status ON queue_items
+                WHEN OLD.status <> NEW.status
+                     AND NEW.status NOT IN ('Success','Failed','Skipped','NeedsReview')
+                BEGIN
+                    DELETE FROM operation_outbox WHERE item_id=NEW.id;
+                END;
                 """
             )
 
@@ -326,12 +368,45 @@ class Store:
                     skipped=(SELECT COUNT(*) FROM queue_items qi WHERE qi.campaign_id=campaigns.id AND qi.status='Skipped')
                 """
             )
+            self._recover_operation_outbox(db)
             self._seed(db)
             # Queued/Running work belonged to the previous process's event loop.
             # Never make it look active after a restart; require explicit review.
             db.execute(
                 "UPDATE campaigns SET status='Paused', completed_at='', last_error='Paused after application restart; review and resume explicitly.' WHERE status IN ('Running','Queued')"
             )
+
+    def _recover_operation_outbox(self, db: sqlite3.Connection) -> None:
+        # update_item() and the outbox trigger commit the local queue outcome in one
+        # transaction. log_operation() then writes the human-readable history row
+        # and clears the matching outbox row in a second atomic transaction. If the
+        # process dies between those transactions, recover the durable outbox before
+        # any campaign can resume so duplicate protection cannot forget a completed
+        # Gmail operation.
+        rows = db.execute(
+            """
+            SELECT o.item_id,o.created_at,o.status,o.remote_id,o.error,
+                   c.id campaign_id,c.mode,c.account,
+                   q.row_number,q.recipient,q.subject,q.fingerprint
+            FROM operation_outbox o
+            JOIN queue_items q ON q.id=o.item_id
+            JOIN campaigns c ON c.id=o.campaign_id
+            ORDER BY o.item_id
+            """
+        ).fetchall()
+        for row in rows:
+            result = _AUDIT_STATUS_TO_RESULT.get(row["status"])
+            if not result:
+                continue
+            db.execute(
+                """INSERT INTO operations(timestamp_utc,mode,account,row_number,recipient,subject,fingerprint,remote_id,result,error,campaign_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    row["created_at"], row["mode"], row["account"], row["row_number"], row["recipient"],
+                    row["subject"], row["fingerprint"], row["remote_id"], result, row["error"], row["campaign_id"],
+                ),
+            )
+            db.execute("DELETE FROM operation_outbox WHERE item_id=?", (row["item_id"],))
 
     def _ensure_column(self, db: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         cols = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -564,7 +639,13 @@ class Store:
     # ---------- operations / duplicate protection ----------
     def fingerprint_succeeded(self, fingerprint: str) -> bool:
         with self._db() as db:
-            row = db.execute("SELECT 1 FROM operations WHERE fingerprint=? AND result='Success' LIMIT 1", (fingerprint,)).fetchone()
+            row = db.execute(
+                """SELECT 1 FROM operations WHERE fingerprint=? AND result='Success'
+                   UNION ALL
+                   SELECT 1 FROM operation_outbox WHERE fingerprint=? AND status='Success'
+                   LIMIT 1""",
+                (fingerprint, fingerprint),
+            ).fetchone()
         return bool(row)
 
     def log_operation(self, item: dict[str, Any]) -> None:
@@ -578,6 +659,16 @@ class Store:
                     item.get("error", ""), item.get("campaign_id", ""),
                 ),
             )
+            status = next((status for status, result in _AUDIT_STATUS_TO_RESULT.items() if result == item.get("result", "Failed")), None)
+            if status and item.get("campaign_id") and item.get("fingerprint"):
+                row = db.execute(
+                    """SELECT item_id FROM operation_outbox
+                       WHERE campaign_id=? AND fingerprint=? AND status=?
+                       ORDER BY item_id LIMIT 1""",
+                    (item["campaign_id"], item["fingerprint"], status),
+                ).fetchone()
+                if row:
+                    db.execute("DELETE FROM operation_outbox WHERE item_id=?", (row["item_id"],))
 
     def history(self, limit: int = 200) -> list[dict[str, Any]]:
         with self._db() as db:
