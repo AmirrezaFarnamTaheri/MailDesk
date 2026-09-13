@@ -77,10 +77,10 @@ function Test-FrozenArtifact([string]$Executable) {
 
     # Do not execute the one-file GUI bundle on a headless hosted runner. Its
     # bootloader must extract the bundled pythonnet/WebView2 payload before Python
-    # code can run, which is slow/unreliable under runner AV scanning and previously
-    # caused false 45-second smoke failures. Inspect the actual PyInstaller CArchive
-    # recursively instead; pyi-archive_viewer is shipped with the exact PyInstaller
-    # version that produced this executable.
+    # code can run, which is slow/unreliable under runner AV scanning and produced
+    # false startup timeouts. Inspect the actual PyInstaller CArchive recursively
+    # instead; pyi-archive_viewer is shipped by the same PyInstaller installation
+    # that produced this executable.
     $archiveViewer = Join-Path $Root '.venv-build\Scripts\pyi-archive_viewer.exe'
     if (-not (Test-Path -LiteralPath $archiveViewer)) {
         throw 'PyInstaller archive viewer is missing from the build environment.'
@@ -90,9 +90,9 @@ function Test-FrozenArtifact([string]$Executable) {
         throw "Could not inspect the frozen PyInstaller archive: $archiveOutput"
     }
 
-    # Also include build-time TOCs. They provide a second source for hidden-module
-    # names while the recursive executable listing proves the produced artifact is
-    # itself parseable as a PyInstaller archive.
+    # Include the build-time TOCs as a second source for hidden-module names while
+    # the recursive executable listing proves that the produced EXE is itself a
+    # parseable PyInstaller archive.
     $tocText = (Get-ChildItem -LiteralPath (Join-Path $Root 'build\MailDesk') -Filter '*.toc' -File -ErrorAction Stop |
         ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
     $manifest = ($archiveOutput + "`n" + $tocText).Replace('\', '/')
@@ -118,7 +118,10 @@ function Test-FrozenArtifact([string]$Executable) {
     }
     $warnings = Get-Content -LiteralPath $warningPath -Raw
     foreach ($module in @('webview', 'pythonnet', 'clr_loader')) {
-        if ($warnings -match "(?im)^missing module named ['\"]?$([Regex]::Escape($module))") {
+        $plainMissing = "missing module named $module"
+        $quotedMissing = "missing module named '$module'"
+        if ($warnings.IndexOf($plainMissing, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+            $warnings.IndexOf($quotedMissing, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             throw "PyInstaller reported required module as missing: $module"
         }
     }
@@ -126,8 +129,8 @@ function Test-FrozenArtifact([string]$Executable) {
     Write-Host "Frozen artifact integrity verified: $($info.Length) bytes"
 }
 
-Sign-Artifact $Exe
 Test-FrozenArtifact $Exe
+Sign-Artifact $Exe
 
 $Artifacts = [Collections.Generic.List[string]]::new()
 $Artifacts.Add($Exe)
