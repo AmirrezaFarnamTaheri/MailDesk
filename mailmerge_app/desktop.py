@@ -11,7 +11,7 @@ import webbrowser
 import httpx
 import uvicorn
 
-from .main import APP_VERSION, app, store
+from .main import APP_VERSION, app
 
 LOCK_PORT = 47631
 APP_PORT = 8765
@@ -49,36 +49,16 @@ def _wait_ready(url: str, timeout: float = 12) -> None:
     raise RuntimeError("MailDesk local server did not start.")
 
 
-def _recover_orphaned_queued_campaigns() -> None:
-    # A queued task lives only in the previous process's event loop. After a
-    # restart, leaving its persisted status as Queued would make the UI report
-    # active work that can never run. Scheduled campaigns remain scheduled; work
-    # that had already started is normalized to Paused by Store initialization.
-    for campaign in store.list_campaigns(limit=10_000):
-        if campaign.get("status") == "Queued":
-            store.set_campaign_status(
-                str(campaign["id"]),
-                "Paused",
-                error="Paused after application restart; review and resume explicitly.",
-            )
-
-
 def main() -> None:
     args = sys.argv[1:]
 
-    # Keep a simple version flag for console-capable launches. The production EXE
-    # uses the Windows GUI subsystem, so CI uses --build-smoke-test below instead
-    # of depending on stdout from a windowed executable.
     if "--version" in args:
         print(f"MailDesk {APP_VERSION}")
         return
 
     # Frozen-EXE startup probe. Do not initialize pywebview/pythonnet here: the
     # Windows CI runner is headless, and loading the CLR-backed GUI stack can block
-    # indefinitely even though the packaged executable itself is healthy. The
-    # PyInstaller build still analyzes and bundles pywebview through its hook and
-    # explicit hidden imports; this probe verifies that the final one-file EXE can
-    # unpack, import MailDesk, dispatch arguments and perform filesystem I/O.
+    # indefinitely even though the packaged executable itself is healthy.
     if "--build-smoke-test" in args:
         index = args.index("--build-smoke-test")
         if index + 1 >= len(args):
@@ -104,8 +84,9 @@ def main() -> None:
         if _port_in_use(APP_PORT):
             raise RuntimeError(f"Port {APP_PORT} is already in use by another local application.")
 
-        _recover_orphaned_queued_campaigns()
-
+        # Store initialization already recovers orphaned Queued/Running campaigns
+        # to Paused for every launch mode, so the desktop shell does not need an
+        # extra O(number-of-campaigns) recovery scan here.
         config = uvicorn.Config(app, host="127.0.0.1", port=APP_PORT, log_level="warning")
         server = uvicorn.Server(config)
         thread = threading.Thread(target=server.run, daemon=True)
