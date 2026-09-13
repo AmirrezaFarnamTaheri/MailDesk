@@ -7,7 +7,6 @@ import mimetypes
 import secrets
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote, urlencode
 
@@ -85,7 +84,7 @@ async def exchange_code(client: dict[str, str], code: str, verifier: str, redire
 
 
 async def refresh_token(token: dict[str, Any], client: dict[str, str]) -> dict[str, Any]:
-    if _token_valid(token):
+    if token_is_valid(token):
         return token
     refresh = token.get("refresh_token")
     if not refresh:
@@ -120,6 +119,20 @@ def token_has_scope(token: dict[str, Any], scope: str) -> bool:
     return scope in scopes
 
 
+def token_is_valid(token: dict[str, Any], *, margin_seconds: int = 30) -> bool:
+    """Return whether an access token remains usable beyond the safety margin."""
+    value = token.get("expires_at")
+    if not value or not token.get("access_token"):
+        return False
+    try:
+        expires_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at > datetime.now(timezone.utc) + timedelta(seconds=max(0, margin_seconds))
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 def build_raw_message(
     to: str,
     subject: str,
@@ -142,15 +155,17 @@ def build_raw_message(
         message.add_alternative(body_html, subtype="html")
         html_part = message.get_payload()[-1]
         for content_id, filename, payload, content_type in inline_attachments or []:
-            guessed = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-            maintype, subtype = guessed.split("/", 1)
+            maintype, subtype = _mime_parts(content_type, filename)
             html_part.add_related(
-                payload, maintype=maintype, subtype=subtype, cid=f"<{content_id}>",
-                filename=filename, disposition="inline"
+                payload,
+                maintype=maintype,
+                subtype=subtype,
+                cid=f"<{content_id}>",
+                filename=filename,
+                disposition="inline",
             )
     for filename, payload, content_type in attachments or []:
-        guessed = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        maintype, subtype = guessed.split("/", 1)
+        maintype, subtype = _mime_parts(content_type, filename)
         message.add_attachment(payload, maintype=maintype, subtype=subtype, filename=filename)
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
 
@@ -167,6 +182,9 @@ async def create_draft(token: dict[str, Any], raw_message: str) -> str:
 
 
 async def send_message(token: dict[str, Any], raw_message: str) -> str:
+    # Deliberately do not blindly retry this POST: after a timeout or connection
+    # loss the server may already have accepted the message, and an automatic
+    # replay could send a duplicate email.
     async with httpx.AsyncClient(timeout=30) as http:
         response = await http.post(
             f"{GMAIL_BASE}/messages/send",
@@ -189,7 +207,10 @@ async def google_sheet_metadata(token: dict[str, Any], spreadsheet_id: str) -> d
 
 
 async def google_sheet_values(token: dict[str, Any], spreadsheet_id: str, sheet_title: str) -> list[list[Any]]:
-    range_name = quote(f"'{sheet_title}'", safe="")
+    # A1 notation escapes apostrophes inside quoted sheet names by doubling them.
+    # Without this, titles such as O'Brien produce an invalid range.
+    a1_title = sheet_title.replace("'", "''")
+    range_name = quote(f"'{a1_title}'", safe="")
     async with httpx.AsyncClient(timeout=60) as http:
         response = await http.get(
             f"{SHEETS_BASE}/{spreadsheet_id}/values/{range_name}",
@@ -204,7 +225,10 @@ def spreadsheet_id_from_url(value: str) -> str:
     raw = value.strip()
     if "/spreadsheets/d/" in raw:
         tail = raw.split("/spreadsheets/d/", 1)[1]
-        return tail.split("/", 1)[0].strip()
+        spreadsheet_id = tail.split("/", 1)[0].strip()
+        if spreadsheet_id and all(ch.isalnum() or ch in "-_" for ch in spreadsheet_id):
+            return spreadsheet_id
+        raise ValueError("The Google Sheets URL contains an invalid spreadsheet ID.")
     if raw and all(ch.isalnum() or ch in "-_" for ch in raw):
         return raw
     raise ValueError("Enter a Google Sheets URL or spreadsheet ID.")
@@ -217,11 +241,13 @@ def _auth_header(token: dict[str, Any]) -> dict[str, str]:
     return {"Authorization": f"Bearer {access}"}
 
 
-def _token_valid(token: dict[str, Any]) -> bool:
-    value = token.get("expires_at")
-    if not value or not token.get("access_token"):
-        return False
-    try:
-        return datetime.fromisoformat(str(value)) > datetime.now(timezone.utc) + timedelta(seconds=30)
-    except ValueError:
-        return False
+def _mime_parts(content_type: str | None, filename: str) -> tuple[str, str]:
+    guessed = str(content_type or "").strip().lower()
+    if "/" not in guessed:
+        guessed = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    maintype, subtype = guessed.split("/", 1)
+    if not maintype or not subtype or any(ch.isspace() for ch in maintype + subtype):
+        return "application", "octet-stream"
+    # Parameters belong in Content-Type parameters, not the subtype argument.
+    subtype = subtype.split(";", 1)[0].strip()
+    return (maintype, subtype) if subtype else ("application", "octet-stream")
