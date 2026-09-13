@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -21,11 +22,12 @@ SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 
 
 class GoogleOutcomeUncertainError(httpx.TransportError):
-    """A Google mutation returned success but its resulting object could not be verified.
+    """A Google mutation may have completed but its outcome could not be verified.
 
     This subclasses TransportError deliberately: the queue already treats transport
     failures after Gmail mutations as uncertain and requires human verification
-    instead of replaying them. A malformed 2xx response has the same safety model.
+    instead of replaying them. Malformed 2xx responses and cancellation while a
+    mutation is in flight have the same safety model.
     """
 
 
@@ -202,8 +204,16 @@ async def create_draft(
     http: httpx.AsyncClient | None = None,
 ) -> str:
     if http is None:
-        async with httpx.AsyncClient(timeout=30) as owned_http:
-            return await create_draft(token, raw_message, http=owned_http)
+        try:
+            async with httpx.AsyncClient(timeout=30) as owned_http:
+                return await create_draft(token, raw_message, http=owned_http)
+        except asyncio.CancelledError as exc:
+            # Cancellation can arrive while closing the owned client after Google
+            # already accepted the request. Never let callers interpret that as a
+            # clean local cancellation and blindly replay the draft mutation.
+            raise GoogleOutcomeUncertainError(
+                "Gmail draft creation was interrupted before its outcome could be recorded safely."
+            ) from exc
     return await _gmail_mutation(
         token,
         f"{GMAIL_BASE}/drafts",
@@ -223,8 +233,13 @@ async def send_message(
     # loss the server may already have accepted the message, and an automatic
     # replay could send a duplicate email.
     if http is None:
-        async with httpx.AsyncClient(timeout=30) as owned_http:
-            return await send_message(token, raw_message, http=owned_http)
+        try:
+            async with httpx.AsyncClient(timeout=30) as owned_http:
+                return await send_message(token, raw_message, http=owned_http)
+        except asyncio.CancelledError as exc:
+            raise GoogleOutcomeUncertainError(
+                "Gmail send was interrupted before its outcome could be recorded safely."
+            ) from exc
     return await _gmail_mutation(
         token,
         f"{GMAIL_BASE}/messages/send",
@@ -242,12 +257,22 @@ async def _gmail_mutation(
     operation: str,
     http: httpx.AsyncClient,
 ) -> str:
-    response = await http.post(
-        url,
-        headers={**_auth_header(token), "Content-Type": "application/json"},
-        json=payload,
-        timeout=30,
-    )
+    try:
+        response = await http.post(
+            url,
+            headers={**_auth_header(token), "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+    except asyncio.CancelledError as exc:
+        # Once an HTTP mutation is in flight we cannot know whether Google
+        # committed it before cancellation reached the local task. Convert the
+        # cancellation into the same explicit uncertain-outcome signal used for
+        # transport failures so the queue requires human verification instead of
+        # replaying a possibly completed send/draft.
+        raise GoogleOutcomeUncertainError(
+            f"Gmail {operation} was interrupted while the request was in flight; its outcome is uncertain."
+        ) from exc
     response.raise_for_status()
     # A 2xx response means Google may already have committed the mutation. If
     # its body is malformed or the returned id is missing, replaying the POST
