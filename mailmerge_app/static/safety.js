@@ -3,6 +3,34 @@
   const NO_ROWS_SENTINEL = '__maildesk_no_rows_selected__';
   const QUEUE_DETAIL_ROW_LIMIT = 500;
 
+  // Keep final-review validation aligned with the backend's conservative email
+  // rules. The original browser regex accepted invalid hostnames such as domains
+  // containing underscores, so a row could look valid until the server rejected
+  // the campaign. The server remains authoritative; this prevents misleading UI.
+  validEmailClient = function validEmailClientStrict(value) {
+    const address = String(value || '');
+    if (!address || address.length > 254 || /\s/.test(address)) return false;
+    const at = address.indexOf('@');
+    if (at <= 0 || at !== address.lastIndexOf('@')) return false;
+    const local = address.slice(0, at);
+    const domain = address.slice(at + 1);
+    const localAtom = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;
+    if (!localAtom.test(local) || new TextEncoder().encode(local).length > 64) return false;
+    if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return false;
+    if (/[\/@:#?\\]/.test(domain)) return false;
+    let asciiDomain = '';
+    try {
+      const parsed = new URL(`http://${domain}`);
+      if (parsed.username || parsed.password || parsed.port || parsed.pathname !== '/' || parsed.search || parsed.hash) return false;
+      asciiDomain = parsed.hostname;
+    } catch {
+      return false;
+    }
+    if (!asciiDomain || asciiDomain.length > 253) return false;
+    const label = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+    return asciiDomain.split('.').every(part => label.test(part));
+  };
+
   // The backend intentionally treats selected_rows=[] as "all rows" so callers
   // can omit a large all-row list. The UI, however, also reaches size=0 when the
   // user explicitly deselects every row. Encode that second state with an
