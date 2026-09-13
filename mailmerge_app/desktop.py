@@ -11,22 +11,11 @@ import webbrowser
 import httpx
 import uvicorn
 
+from .instance import acquire_instance_lock
 from .main import APP_VERSION, app
 
-LOCK_PORT = 47631
 APP_PORT = 8765
 APP_URL = f"http://127.0.0.1:{APP_PORT}/"
-
-
-def _instance_lock() -> socket.socket | None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("127.0.0.1", LOCK_PORT))
-        sock.listen(1)
-        return sock
-    except OSError:
-        sock.close()
-        return None
 
 
 def _port_in_use(port: int) -> bool:
@@ -56,9 +45,6 @@ def main() -> None:
         print(f"MailDesk {APP_VERSION}")
         return
 
-    # Frozen-EXE startup probe. Do not initialize pywebview/pythonnet here: the
-    # Windows CI runner is headless, and loading the CLR-backed GUI stack can block
-    # indefinitely even though the packaged executable itself is healthy.
     if "--build-smoke-test" in args:
         index = args.index("--build-smoke-test")
         if index + 1 >= len(args):
@@ -68,11 +54,8 @@ def main() -> None:
         marker.write_text(f"MailDesk {APP_VERSION}", encoding="utf-8")
         return
 
-    lock = _instance_lock()
+    lock = acquire_instance_lock()
     if lock is None:
-        # A second instance may arrive while the first is still starting. Open the
-        # page only after verifying it really is MailDesk, not an unrelated local
-        # service that happens to use the same port.
         try:
             _wait_ready(APP_URL, timeout=8)
         except RuntimeError:
@@ -84,9 +67,6 @@ def main() -> None:
         if _port_in_use(APP_PORT):
             raise RuntimeError(f"Port {APP_PORT} is already in use by another local application.")
 
-        # Store initialization already recovers orphaned Queued/Running campaigns
-        # to Paused for every launch mode, so the desktop shell does not need an
-        # extra O(number-of-campaigns) recovery scan here.
         config = uvicorn.Config(app, host="127.0.0.1", port=APP_PORT, log_level="warning")
         server = uvicorn.Server(config)
         thread = threading.Thread(target=server.run, daemon=True)
