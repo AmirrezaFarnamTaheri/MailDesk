@@ -236,6 +236,44 @@ class ApiQueueSafetyTests(unittest.TestCase):
         self.assertFalse(self.main.store.fingerprint_succeeded("interrupted-fp"))
         self.assertEqual(self.main.store.history(1)[0]["result"], "Uncertain")
 
+    def test_gmail_campaign_reuses_one_http_pool_for_multiple_messages(self):
+        campaign = self.main.store.create_campaign(
+            {
+                "name": "Pooled send",
+                "mode": "send",
+                "account": "sender@example.com",
+                "batch_id": "pooled-send-1234",
+                "status": "Queued",
+                "throttle_ms": 0,
+                "skip_duplicates": False,
+            },
+            [
+                {"row_number": "2", "to": "one@example.com", "subject": "S1", "body": "B1", "fingerprint": "pool-fp-1", "attachments": []},
+                {"row_number": "3", "to": "two@example.com", "subject": "S2", "body": "B2", "fingerprint": "pool-fp-2", "attachments": []},
+            ],
+        )
+        token = {"access_token": "token", "expires_at": "2999-01-01T00:00:00+00:00", "scope": "https://www.googleapis.com/auth/gmail.compose"}
+        send = AsyncMock(side_effect=["gmail-1", "gmail-2"])
+
+        async def run_test():
+            with patch.object(
+                self.main,
+                "_verified_google_account",
+                AsyncMock(return_value=(token, "sender@example.com")),
+            ), patch.object(self.main, "send_message", send):
+                await self.main._run_campaign_locked(campaign["id"])
+
+        asyncio.run(run_test())
+        current = self.main.store.get_campaign(campaign["id"], include_items=True)
+        self.assertEqual(current["status"], "Completed")
+        self.assertEqual([item["remote_id"] for item in current["items"]], ["gmail-1", "gmail-2"])
+        self.assertEqual(send.await_count, 2)
+        first_http = send.await_args_list[0].kwargs.get("http")
+        second_http = send.await_args_list[1].kwargs.get("http")
+        self.assertIsNotNone(first_http)
+        self.assertIs(first_http, second_http)
+        self.assertTrue(first_http.is_closed)
+
 
 if __name__ == "__main__":
     unittest.main()
