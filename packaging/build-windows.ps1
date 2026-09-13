@@ -129,6 +129,36 @@ function Test-FrozenArtifact([string]$Executable) {
     Write-Host "Frozen artifact integrity verified: $($info.Length) bytes"
 }
 
+function Resolve-InnoCompiler {
+    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($command -and $command.Source -and (Test-Path -LiteralPath $command.Source)) {
+        return $command.Source
+    }
+
+    # Environment-variable names containing parentheses cannot be expanded safely
+    # as "$env:ProgramFiles(x86)"; that form is parsed as ProgramFiles plus literal
+    # text and produces a malformed path. Resolve the variables explicitly.
+    $roots = @(
+        [Environment]::GetEnvironmentVariable('ProgramFiles(x86)'),
+        [Environment]::GetEnvironmentVariable('ProgramFiles')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    foreach ($rootPath in $roots) {
+        $candidate = Join-Path $rootPath 'Inno Setup 6\ISCC.exe'
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:ChocolateyInstall)) {
+        $shim = Join-Path $env:ChocolateyInstall 'bin\ISCC.exe'
+        if (Test-Path -LiteralPath $shim) {
+            return $shim
+        }
+    }
+    return $null
+}
+
 Test-FrozenArtifact $Exe
 Sign-Artifact $Exe
 
@@ -136,12 +166,10 @@ $Artifacts = [Collections.Generic.List[string]]::new()
 $Artifacts.Add($Exe)
 
 if (-not $SkipInstaller) {
-    $Inno = @(
-        "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $Inno = Resolve-InnoCompiler
     if (-not $Inno) { throw 'Inno Setup 6 is required to build the installer.' }
 
+    Write-Host "Using Inno Setup compiler: $Inno"
     & $Inno "/DMyAppVersion=$Version" packaging\installer.iss
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed.' }
 
