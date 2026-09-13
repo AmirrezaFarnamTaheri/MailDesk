@@ -37,7 +37,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - run: node --check mailmerge_app/static/app.js
+      - name: Validate frontend JavaScript
+        run: |
+          node --check mailmerge_app/static/app.js
+          node --check mailmerge_app/static/safety.js
       - name: Validate PowerShell launch/build scripts
         if: runner.os == 'Windows'
         shell: pwsh
