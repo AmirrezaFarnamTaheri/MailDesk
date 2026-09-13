@@ -4,7 +4,7 @@ from pathlib import Path
 root = Path(SPECPATH).parent
 
 a = Analysis(
-    [str(root / 'mailmerge_app' / 'desktop.py')],
+    [str(root / 'packaging' / 'desktop_entry.py')],
     pathex=[str(root)],
     binaries=[],
     datas=[(str(root / 'mailmerge_app' / 'static'), 'mailmerge_app/static')],
