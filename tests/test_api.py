@@ -116,6 +116,32 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertIn("Recipient is blank", response.json()["detail"])
 
+    def test_subject_line_break_is_rejected_before_queue_execution(self):
+        message = self._message("header@example.com")
+        message["subject"] = "Hello\nBcc: injected@example.com"
+        batch_id = self._batch_id([message])
+        response = self.client.post("/api/campaigns", json={
+            "name":"Header safety","mode":"dry_run","batch_id":batch_id,"messages":[message],
+            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+        })
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("Subject contains a line break", response.json()["detail"])
+
+    def test_batch_limit_rejects_before_scanning_all_message_fields(self):
+        previous = self.client.get("/api/settings").json()
+        self.client.put("/api/settings", json={"max_batch_size": 2, "default_throttle_ms": previous["default_throttle_ms"]})
+        try:
+            messages = [self._message("") for _ in range(3)]
+            response = self.client.post("/api/campaigns", json={
+                "name":"Too large","mode":"dry_run","batch_id":"0123456789abcdef","messages":messages,
+                "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+            })
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertIn("current safety limit is 2", response.json()["detail"])
+            self.assertNotIn("Recipient is blank", response.json()["detail"])
+        finally:
+            self.client.put("/api/settings", json=previous)
+
     def test_schedule_near_or_in_past_is_rejected_instead_of_sending_now(self):
         messages = [self._message()]
         batch_id = self._batch_id(messages)
@@ -163,6 +189,12 @@ class ApiFlowTests(unittest.TestCase):
     def test_attachment_safety_blocks_executable(self):
         response=self.client.post('/api/attachments',files={"file":("payload.ps1",b"Write-Host hi","text/plain")})
         self.assertEqual(response.status_code,400)
+
+    def test_attachment_filename_is_bounded_before_filesystem_write(self):
+        long_name = ("a" * 260) + ".txt"
+        response = self.client.post('/api/attachments', files={"file": (long_name, b"hello", "text/plain")})
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("filename is invalid or too long", response.json()["detail"])
 
     def test_oversized_oauth_client_is_rejected_instead_of_truncated(self):
         response = self.client.post(
