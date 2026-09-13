@@ -42,6 +42,14 @@ class RepositoryIntegrityTests(unittest.TestCase):
         text = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^-r\s+requirements\.txt\s*$")
 
+    def test_frozen_desktop_entrypoint_preserves_package_context(self):
+        spec_text = (ROOT / "packaging" / "MailDesk.spec").read_text(encoding="utf-8")
+        entry_text = (ROOT / "packaging" / "desktop_entry.py").read_text(encoding="utf-8")
+
+        self.assertIn("root / 'packaging' / 'desktop_entry.py'", spec_text)
+        self.assertNotIn("root / 'mailmerge_app' / 'desktop.py'", spec_text)
+        self.assertIn("from mailmerge_app.desktop import main", entry_text)
+
 
 if __name__ == "__main__":
     unittest.main()
