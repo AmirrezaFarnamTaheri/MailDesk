@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Any
 
 import httpx
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.utils.exceptions import IllegalCharacterError
 
 from .gmail_client import google_sheet_metadata, google_sheet_values
 
@@ -15,6 +18,7 @@ MAX_SNAPSHOT_ROWS = 100_000
 MAX_SNAPSHOT_COLUMNS = 1_000
 MAX_CHUNK_ROWS = 1_000
 MAX_CHUNK_CELLS = 250_000
+MAX_XLSX_CELL_CHARS = 32_767
 
 
 async def snapshot_spreadsheet(token: dict[str, Any], spreadsheet_id: str, destination: Path) -> dict[str, Any]:
@@ -106,11 +110,19 @@ async def snapshot_spreadsheet(token: dict[str, Any], spreadsheet_id: str, desti
                             while pending_blank_rows:
                                 ws.append([])
                                 pending_blank_rows -= 1
-                            ws.append(cells)
+                            try:
+                                ws.append([_literal_excel_value(ws, value) for value in cells])
+                            except IllegalCharacterError as exc:
+                                raise ValueError(
+                                    f"Worksheet {source_title!r} contains a value that cannot be represented safely in XLSX."
+                                ) from exc
                         else:
                             pending_blank_rows += 1
 
-            wb.save(temporary)
+            # ZIP serialization/compression is synchronous and can be substantial at
+            # the one-million-cell limit. Keep it off the API event loop so health,
+            # queue controls, and other local requests remain responsive.
+            await asyncio.to_thread(wb.save, temporary)
             os.replace(temporary, destination)
         finally:
             wb.close()
@@ -123,6 +135,27 @@ async def snapshot_spreadsheet(token: dict[str, Any], spreadsheet_id: str, desti
         "sheets": saved_titles,
         "total_cells": total_cells,
     }
+
+
+def _literal_excel_value(worksheet: Any, value: Any) -> Any:
+    """Preserve a Google API value as data rather than reinterpreting it in XLSX."""
+    if not isinstance(value, str):
+        return value
+    if len(value) > MAX_XLSX_CELL_CHARS:
+        # openpyxl silently truncates long strings to Excel's cell limit. Rejecting
+        # preserves MailDesk's review guarantee instead of changing recipient data.
+        raise ValueError(
+            f"Google Sheet cell exceeds the XLSX limit of {MAX_XLSX_CELL_CHARS:,} characters. Shorten it before importing."
+        )
+    if value.startswith("="):
+        # openpyxl normally treats a leading '=' as a formula even though the
+        # Sheets API returned FORMATTED_VALUE data. Force an explicit string cell so
+        # values such as '=HYPERLINK(...)' round-trip literally and cannot become a
+        # formula in the local snapshot.
+        cell = WriteOnlyCell(worksheet, value=value)
+        cell.data_type = "s"
+        return cell
+    return value
 
 
 def _unique_excel_title(source: str, used: set[str]) -> str:
