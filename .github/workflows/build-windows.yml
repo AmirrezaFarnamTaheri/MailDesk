@@ -127,9 +127,13 @@ jobs:
             if (-not (Test-Path -LiteralPath $asset)) { throw "Missing release asset: $asset" }
           }
 
-          if (gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null) {
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          if ($releaseExists) {
             gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Could not update assets for release $tag." }
             gh release edit $tag --title "MailDesk $version" --latest --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Could not update release $tag." }
           } else {
             gh release create $tag @assets `
               --target $env:GITHUB_SHA `
@@ -137,4 +141,5 @@ jobs:
               --generate-notes `
               --latest `
               --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Could not create release $tag." }
           }
