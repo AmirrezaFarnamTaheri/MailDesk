@@ -11,7 +11,7 @@ function Invoke-NativeChecked {
     )
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code $LASTEXITCODE: $FilePath $($Arguments -join ' ')"
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
     }
 }
 
@@ -19,9 +19,14 @@ function New-MailDeskVenv {
     $py = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($py) {
         foreach ($version in @('3.13', '3.12', '3.11')) {
+            # A failed launcher attempt can leave a partially-created environment.
+            # Remove it before trying the next supported interpreter so a stale
+            # python.exe cannot make a later attempt look successful.
+            Remove-Item -LiteralPath $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
             & $py.Source "-$version" -m venv $VenvDir 2>$null
             if ($LASTEXITCODE -eq 0 -and (Test-Path $Python)) { return }
         }
+        Remove-Item -LiteralPath $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     $systemPython = Get-Command python.exe -ErrorAction SilentlyContinue
@@ -56,6 +61,7 @@ $InstalledHash = if (Test-Path $HashMarker) { (Get-Content -LiteralPath $HashMar
 if ($InstalledHash -ne $RequirementHash) {
     $env:PIP_DISABLE_PIP_VERSION_CHECK = '1'
     Invoke-NativeChecked -FilePath $Python -Arguments @('-m', 'pip', 'install', '-r', $Requirements)
+    Invoke-NativeChecked -FilePath $Python -Arguments @('-m', 'pip', 'check')
     [IO.File]::WriteAllText($HashMarker, $RequirementHash, [Text.UTF8Encoding]::new($false))
 }
 
