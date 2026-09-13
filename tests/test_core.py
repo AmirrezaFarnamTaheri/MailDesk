@@ -10,19 +10,23 @@ import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from unittest.mock import AsyncMock, patch
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from mailmerge_app.browser_profiles import compose_url, gmail_base_url, inbox_url
 from mailmerge_app.gmail_client import (
     GMAIL_SCOPE,
     SHEETS_SCOPE,
     build_raw_message,
+    google_sheet_values,
     new_oauth_request,
     parse_client_secret,
-    spreadsheet_id_from_url,
     refresh_token,
+    spreadsheet_id_from_url,
+    token_is_valid,
 )
+from mailmerge_app.google_sheets import snapshot_spreadsheet
 from mailmerge_app.sheet_reader import list_sheets, suggest_mappings, table
 from mailmerge_app.storage import Store
 from mailmerge_app.template_engine import (
@@ -109,6 +113,15 @@ class SheetReaderTests(unittest.TestCase):
             _, rows, _ = table(path, "People", 1)
             self.assertEqual(len(rows), 5000)
 
+    def test_csv_preserves_quoted_multiline_cells(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "people.csv"
+            path.write_text('Name,Email,Note\r\nAda,ada@example.com,"Line one\r\nLine two"\r\n', encoding="utf-8")
+            headers, rows, _ = table(path, "people", 1)
+            self.assertEqual(headers, ["Name", "Email", "Note"])
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["Note"], "Line one\r\nLine two")
+
 
 class GmailClientTests(unittest.TestCase):
     def test_desktop_client_secret_only(self):
@@ -134,16 +147,61 @@ class GmailClientTests(unittest.TestCase):
         self.assertTrue(parsed.is_multipart())
         self.assertIn("note.txt", [part.get_filename() for part in parsed.walk() if part.get_filename()])
 
+    def test_invalid_mime_header_falls_back_instead_of_breaking_message_build(self):
+        raw = build_raw_message("to@example.com", "Subject", "Body", attachments=[("payload.bin", b"x", "not-a-mime")])
+        padded = raw + "=" * (-len(raw) % 4)
+        parsed = email.message_from_bytes(base64.urlsafe_b64decode(padded.encode("ascii")))
+        part = next(part for part in parsed.walk() if part.get_filename() == "payload.bin")
+        self.assertEqual(part.get_content_type(), "application/octet-stream")
+
     def test_google_sheet_id_parsing(self):
         sid = "1AbCdEf_123-xyz"
         self.assertEqual(spreadsheet_id_from_url(f"https://docs.google.com/spreadsheets/d/{sid}/edit#gid=0"), sid)
         self.assertEqual(spreadsheet_id_from_url(sid), sid)
         with self.assertRaises(ValueError): spreadsheet_id_from_url("not a valid id / url")
+        with self.assertRaises(ValueError): spreadsheet_id_from_url("https://docs.google.com/spreadsheets/d/!!!/edit")
 
     def test_expired_oauth_without_refresh_token_requires_reconnect(self):
         token = {"access_token": "old", "expires_at": "2000-01-01T00:00:00+00:00"}
         with self.assertRaises(RuntimeError):
             asyncio.run(refresh_token(token, {"client_id": "id", "client_secret": "secret"}))
+
+    def test_naive_token_expiry_is_handled_without_type_error(self):
+        self.assertFalse(token_is_valid({"access_token": "old", "expires_at": "2000-01-01T00:00:00"}))
+        self.assertTrue(token_is_valid({"access_token": "ok", "expires_at": "2999-01-01T00:00:00"}))
+
+    def test_google_sheet_titles_escape_apostrophes_in_a1_ranges(self):
+        response = unittest.mock.MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"values": [["ok"]]}
+        http = unittest.mock.MagicMock()
+        http.get = AsyncMock(return_value=response)
+        context = unittest.mock.MagicMock()
+        context.__aenter__ = AsyncMock(return_value=http)
+        context.__aexit__ = AsyncMock(return_value=None)
+        with patch("mailmerge_app.gmail_client.httpx.AsyncClient", return_value=context):
+            values = asyncio.run(google_sheet_values({"access_token": "token"}, "sheet-id", "O'Brien"))
+        self.assertEqual(values, [["ok"]])
+        called_url = http.get.await_args.args[0]
+        self.assertIn("%27O%27%27Brien%27", called_url)
+
+
+class GoogleSheetsSnapshotTests(unittest.TestCase):
+    def test_snapshot_replaces_destination_only_after_complete_save(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "snapshot.xlsx"
+            destination.write_bytes(b"old snapshot")
+            metadata = {"properties": {"title": "Book"}, "sheets": [{"properties": {"title": "People"}}]}
+            with patch("mailmerge_app.google_sheets.google_sheet_metadata", AsyncMock(return_value=metadata)), patch(
+                "mailmerge_app.google_sheets.google_sheet_values", AsyncMock(return_value=[["Name"], ["Ada"]])
+            ):
+                result = asyncio.run(snapshot_spreadsheet({"access_token": "token"}, "sheet-id", destination))
+            self.assertEqual(result["sheets"], ["People"])
+            wb = load_workbook(destination, read_only=True)
+            try:
+                self.assertEqual(wb["People"]["A2"].value, "Ada")
+            finally:
+                wb.close()
 
 
 class BrowserComposeTests(unittest.TestCase):
