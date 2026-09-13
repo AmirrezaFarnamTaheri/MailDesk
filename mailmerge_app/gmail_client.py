@@ -199,18 +199,32 @@ async def google_sheet_metadata(token: dict[str, Any], spreadsheet_id: str) -> d
     async with httpx.AsyncClient(timeout=30) as http:
         response = await http.get(
             f"{SHEETS_BASE}/{spreadsheet_id}",
-            params={"includeGridData": "false", "fields": "properties.title,sheets.properties"},
+            params={
+                "includeGridData": "false",
+                "fields": "properties.title,sheets.properties(title,sheetType,gridProperties)",
+            },
             headers=_auth_header(token),
         )
         response.raise_for_status()
         return response.json()
 
 
-async def google_sheet_values(token: dict[str, Any], spreadsheet_id: str, sheet_title: str) -> list[list[Any]]:
+async def google_sheet_values(
+    token: dict[str, Any],
+    spreadsheet_id: str,
+    sheet_title: str,
+    start_row: int | None = None,
+    end_row: int | None = None,
+) -> list[list[Any]]:
     # A1 notation escapes apostrophes inside quoted sheet names by doubling them.
     # Without this, titles such as O'Brien produce an invalid range.
     a1_title = sheet_title.replace("'", "''")
-    range_name = quote(f"'{a1_title}'", safe="")
+    a1_range = f"'{a1_title}'"
+    if start_row is not None or end_row is not None:
+        if start_row is None or end_row is None or start_row < 1 or end_row < start_row:
+            raise ValueError("Google Sheet row range is invalid.")
+        a1_range += f"!{start_row}:{end_row}"
+    range_name = quote(a1_range, safe="")
     async with httpx.AsyncClient(timeout=60) as http:
         response = await http.get(
             f"{SHEETS_BASE}/{spreadsheet_id}/values/{range_name}",
@@ -218,7 +232,10 @@ async def google_sheet_values(token: dict[str, Any], spreadsheet_id: str, sheet_
             headers=_auth_header(token),
         )
         response.raise_for_status()
-        return response.json().get("values", [])
+        values = response.json().get("values", [])
+        if not isinstance(values, list):
+            raise ValueError("Google Sheets returned an invalid values payload.")
+        return values
 
 
 def spreadsheet_id_from_url(value: str) -> str:
