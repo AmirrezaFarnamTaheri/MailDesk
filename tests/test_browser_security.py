@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mailmerge_app.browser_profiles import _safe_profile_dir, launch_url
+from mailmerge_app.browser_profiles import MAX_BROWSER_COMPOSE_URL_CHARS, _safe_profile_dir, compose_url, launch_url
 
 
 class BrowserProfileSecurityTests(unittest.TestCase):
@@ -24,6 +24,11 @@ class BrowserProfileSecurityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 launch_url(profile, "https://example.com/")
             popen.assert_not_called()
+
+    def test_browser_compose_url_is_bounded_below_os_command_line_limits(self):
+        self.assertLess(MAX_BROWSER_COMPOSE_URL_CHARS, 32767)
+        with self.assertRaisesRegex(ValueError, "too large"):
+            compose_url("to@example.com", "Subject", "x" * (MAX_BROWSER_COMPOSE_URL_CHARS + 1))
 
 
 if __name__ == "__main__":
