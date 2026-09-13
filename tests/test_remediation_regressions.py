@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from mailmerge_app.gmail_client import GoogleOutcomeUncertainError, send_message
 from mailmerge_app.storage import Store
+from mailmerge_app.template_engine import batch_fingerprint, is_valid_email, message_fingerprint
 
 
 class GmailMutationSafetyTests(unittest.TestCase):
@@ -31,6 +32,34 @@ class GmailMutationSafetyTests(unittest.TestCase):
 
         with self.assertRaises(GoogleOutcomeUncertainError):
             asyncio.run(send_message({"access_token": "token"}, "raw-message", http=http))
+
+
+class TemplateSafetyRegressionTests(unittest.TestCase):
+    def test_email_validation_rejects_invalid_domain_and_dot_atom_forms(self):
+        self.assertFalse(is_valid_email("person@bad_domain.example"))
+        self.assertFalse(is_valid_email("first..last@example.com"))
+        self.assertFalse(is_valid_email(".first@example.com"))
+        self.assertFalse(is_valid_email("last.@example.com"))
+        self.assertTrue(is_valid_email("person+tag@example.com"))
+        self.assertTrue(is_valid_email("person@bücher.de"))
+
+    def test_message_fingerprint_has_no_delimiter_collision(self):
+        left = message_fingerprint(
+            "send", "sender@example.com", "to@example.com", "", "", "A|B", "C"
+        )
+        right = message_fingerprint(
+            "send", "sender@example.com", "to@example.com", "", "", "A", "B|C"
+        )
+        self.assertNotEqual(left, right)
+
+    def test_batch_fingerprint_has_no_delimiter_collision(self):
+        left = batch_fingerprint([
+            {"row_number": "2", "to": "to@example.com", "subject": "A|B", "body": "C"}
+        ])
+        right = batch_fingerprint([
+            {"row_number": "2", "to": "to@example.com", "subject": "A", "body": "B|C"}
+        ])
+        self.assertNotEqual(left, right)
 
 
 class QueuePersistenceRegressionTests(unittest.TestCase):
