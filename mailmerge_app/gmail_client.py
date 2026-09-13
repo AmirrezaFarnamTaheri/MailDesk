@@ -88,7 +88,13 @@ async def exchange_code(client: dict[str, str], code: str, verifier: str, redire
         )
         response.raise_for_status()
         token = response.json()
-    token["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=int(token.get("expires_in", 3600)) - 60)).isoformat()
+    if not isinstance(token, dict) or not token.get("access_token"):
+        raise RuntimeError("Google token exchange returned an invalid response.")
+    try:
+        lifetime = int(token.get("expires_in", 3600))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Google token exchange returned an invalid expiry.") from exc
+    token["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=max(0, lifetime - 60))).isoformat()
     return token
 
 
@@ -110,9 +116,15 @@ async def refresh_token(token: dict[str, Any], client: dict[str, str]) -> dict[s
         )
         response.raise_for_status()
         updated = response.json()
+    if not isinstance(updated, dict) or not updated.get("access_token"):
+        raise RuntimeError("Google token refresh returned an invalid response.")
+    try:
+        lifetime = int(updated.get("expires_in", 3600))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Google token refresh returned an invalid expiry.") from exc
     updated["refresh_token"] = refresh
     updated["scope"] = updated.get("scope") or token.get("scope", "")
-    updated["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=int(updated.get("expires_in", 3600)) - 60)).isoformat()
+    updated["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=max(0, lifetime - 60))).isoformat()
     return updated
 
 
@@ -345,12 +357,14 @@ def _auth_header(token: dict[str, Any]) -> dict[str, str]:
 
 
 def _mime_parts(content_type: str | None, filename: str) -> tuple[str, str]:
+    # Strip Content-Type parameters before validating the media type. Checking for
+    # whitespace first incorrectly downgraded normal values such as
+    # "text/plain; charset=utf-8" to application/octet-stream.
     guessed = str(content_type or "").strip().lower()
-    if "/" not in guessed:
-        guessed = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    maintype, subtype = guessed.split("/", 1)
+    media_type = guessed.split(";", 1)[0].strip() if guessed else ""
+    if "/" not in media_type:
+        media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    maintype, subtype = (part.strip() for part in media_type.split("/", 1))
     if not maintype or not subtype or any(ch.isspace() for ch in maintype + subtype):
         return "application", "octet-stream"
-    # Parameters belong in Content-Type parameters, not the subtype argument.
-    subtype = subtype.split(";", 1)[0].strip()
-    return (maintype, subtype) if subtype else ("application", "octet-stream")
+    return maintype, subtype
