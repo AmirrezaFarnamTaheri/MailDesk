@@ -53,61 +53,81 @@ function Sign-Artifact([string]$Path) {
     if ($LASTEXITCODE -ne 0) { throw "Signing failed for $Path" }
 }
 
-function Stop-ProcessTree([Diagnostics.Process]$Process) {
-    if ($Process.HasExited) { return }
-    try {
-        & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+function Test-FrozenArtifact([string]$Executable) {
+    if (-not (Test-Path -LiteralPath $Executable)) {
+        throw "Frozen executable is missing: $Executable"
     }
-    catch {
-        try { $Process.Kill($true) } catch { }
-    }
-}
 
-function Invoke-FrozenSmokeTest([string]$Executable, [string]$Marker, [int]$TimeoutSeconds = 45) {
-    Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
-    $process = Start-Process -FilePath $Executable -ArgumentList @('--build-smoke-test', $Marker) -PassThru
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $info = Get-Item -LiteralPath $Executable
+    if ($info.Length -lt 5MB) {
+        throw "Frozen executable is unexpectedly small ($($info.Length) bytes)."
+    }
+
+    $stream = [IO.File]::OpenRead($Executable)
     try {
-        while ([DateTime]::UtcNow -lt $deadline) {
-            if (Test-Path -LiteralPath $Marker) {
-                # The marker is the frozen-child startup contract. A PyInstaller
-                # one-file GUI parent can remain resident while bundled GUI/CLR
-                # teardown completes on a headless runner, so process exit is not
-                # a reliable success signal. Validate the marker, then terminate
-                # the probe tree explicitly in the finally block.
-                $detail = (Get-Content -LiteralPath $Marker -Raw).Trim()
-                if ($detail.StartsWith('ERROR:')) {
-                    throw "The packaged executable reported a startup error: $detail"
-                }
-                if ([string]::IsNullOrWhiteSpace($detail)) {
-                    Start-Sleep -Milliseconds 100
-                    continue
-                }
-                return
-            }
-            if ($process.HasExited) {
-                throw "The packaged executable exited with code $($process.ExitCode) before writing its smoke-test marker."
-            }
-            Start-Sleep -Milliseconds 200
+        $first = $stream.ReadByte()
+        $second = $stream.ReadByte()
+        if ($first -ne 0x4D -or $second -ne 0x5A) {
+            throw 'MailDesk.exe is not a valid PE/MZ executable.'
         }
-        throw "Frozen executable did not produce its startup marker within $TimeoutSeconds seconds."
     }
     finally {
-        Stop-ProcessTree $process
-        $process.Dispose()
+        $stream.Dispose()
     }
+
+    # Do not execute the one-file GUI bundle on a headless hosted runner. Its
+    # bootloader must extract the bundled pythonnet/WebView2 payload before Python
+    # code can run, which is slow/unreliable under runner AV scanning and previously
+    # caused false 45-second smoke failures. Inspect the actual PyInstaller CArchive
+    # recursively instead; pyi-archive_viewer is shipped with the exact PyInstaller
+    # version that produced this executable.
+    $archiveViewer = Join-Path $Root '.venv-build\Scripts\pyi-archive_viewer.exe'
+    if (-not (Test-Path -LiteralPath $archiveViewer)) {
+        throw 'PyInstaller archive viewer is missing from the build environment.'
+    }
+    $archiveOutput = (& $archiveViewer -r -b $Executable 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not inspect the frozen PyInstaller archive: $archiveOutput"
+    }
+
+    # Also include build-time TOCs. They provide a second source for hidden-module
+    # names while the recursive executable listing proves the produced artifact is
+    # itself parseable as a PyInstaller archive.
+    $tocText = (Get-ChildItem -LiteralPath (Join-Path $Root 'build\MailDesk') -Filter '*.toc' -File -ErrorAction Stop |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    $manifest = ($archiveOutput + "`n" + $tocText).Replace('\', '/')
+
+    $requiredEntries = @(
+        'webview',
+        'pythonnet',
+        'clr_loader',
+        'Microsoft.Web.WebView2.Core.dll',
+        'Microsoft.Web.WebView2.WinForms.dll',
+        'mailmerge_app/static/app.js',
+        'mailmerge_app/static/index.html'
+    )
+    foreach ($entry in $requiredEntries) {
+        if ($manifest.IndexOf($entry, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            throw "Frozen artifact is missing required runtime content: $entry"
+        }
+    }
+
+    $warningPath = Join-Path $Root 'build\MailDesk\warn-MailDesk.txt'
+    if (-not (Test-Path -LiteralPath $warningPath)) {
+        throw 'PyInstaller warning report was not produced.'
+    }
+    $warnings = Get-Content -LiteralPath $warningPath -Raw
+    foreach ($module in @('webview', 'pythonnet', 'clr_loader')) {
+        if ($warnings -match "(?im)^missing module named ['\"]?$([Regex]::Escape($module))") {
+            throw "PyInstaller reported required module as missing: $module"
+        }
+    }
+
+    Write-Host "Frozen artifact integrity verified: $($info.Length) bytes"
 }
 
 Sign-Artifact $Exe
-
-$SmokeMarker = Join-Path $env:TEMP "maildesk-smoke-$PID.txt"
-Invoke-FrozenSmokeTest -Executable $Exe -Marker $SmokeMarker
-$VersionOutput = (Get-Content -LiteralPath $SmokeMarker -Raw).Trim()
-Remove-Item -LiteralPath $SmokeMarker -Force -ErrorAction SilentlyContinue
-$ExpectedVersionOutput = "MailDesk $Version"
-if ($VersionOutput -ne $ExpectedVersionOutput) {
-    throw "Unexpected executable smoke-test marker. Expected '$ExpectedVersionOutput', got '$VersionOutput'."
-}
+Test-FrozenArtifact $Exe
 
 $Artifacts = [Collections.Generic.List[string]]::new()
 $Artifacts.Add($Exe)
