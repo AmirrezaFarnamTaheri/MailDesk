@@ -116,7 +116,7 @@ class SheetReaderTests(unittest.TestCase):
     def test_csv_preserves_quoted_multiline_cells(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "people.csv"
-            path.write_text('Name,Email,Note\r\nAda,ada@example.com,"Line one\r\nLine two"\r\n', encoding="utf-8")
+            path.write_bytes(b'Name,Email,Note\r\nAda,ada@example.com,"Line one\r\nLine two"\r\n')
             headers, rows, _ = table(path, "people", 1)
             self.assertEqual(headers, ["Name", "Email", "Note"])
             self.assertEqual(len(rows), 1)
