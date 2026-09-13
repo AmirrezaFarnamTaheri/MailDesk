@@ -6,10 +6,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from mailmerge_app.gmail_client import GoogleOutcomeUncertainError
 from mailmerge_app.storage import Store
 
 
@@ -199,6 +200,41 @@ class ApiQueueSafetyTests(unittest.TestCase):
         current = self.main.store.get_campaign(campaign["id"], include_items=True)
         self.assertEqual(current["status"], "Paused")
         self.assertEqual(current["items"][0]["status"], "Pending")
+
+    def test_uncertain_gmail_interruption_pauses_without_replayable_pending_item(self):
+        campaign = self.main.store.create_campaign(
+            {
+                "name": "Interrupted send",
+                "mode": "send",
+                "account": "sender@example.com",
+                "batch_id": "interrupt123456",
+                "status": "Queued",
+                "throttle_ms": 0,
+            },
+            [{"row_number": "2", "to": "to@example.com", "subject": "S", "body": "B", "fingerprint": "interrupted-fp", "attachments": []}],
+        )
+        token = {"access_token": "token", "expires_at": "2999-01-01T00:00:00+00:00", "scope": "https://www.googleapis.com/auth/gmail.compose"}
+
+        async def run_test():
+            with patch.object(
+                self.main,
+                "_verified_google_account",
+                AsyncMock(return_value=(token, "sender@example.com")),
+            ), patch.object(
+                self.main,
+                "send_message",
+                AsyncMock(side_effect=GoogleOutcomeUncertainError("interrupted in flight")),
+            ):
+                await self.main._run_campaign_locked(campaign["id"])
+
+        asyncio.run(run_test())
+        current = self.main.store.get_campaign(campaign["id"], include_items=True)
+        self.assertEqual(current["status"], "Paused")
+        self.assertEqual(current["items"][0]["status"], "NeedsReview")
+        self.assertEqual(current["items"][0]["attempts"], 1)
+        self.assertIn("uncertain", current["last_error"].lower())
+        self.assertFalse(self.main.store.fingerprint_succeeded("interrupted-fp"))
+        self.assertEqual(self.main.store.history(1)[0]["result"], "Uncertain")
 
 
 if __name__ == "__main__":
