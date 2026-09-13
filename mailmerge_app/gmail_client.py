@@ -20,11 +20,12 @@ GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 
 
-class GoogleOutcomeUncertainError(RuntimeError):
+class GoogleOutcomeUncertainError(httpx.TransportError):
     """A Google mutation returned success but its resulting object could not be verified.
 
-    Callers must not blindly replay the operation: the remote side may already have
-    completed it even though the response body is unusable or missing its identifier.
+    This subclasses TransportError deliberately: the queue already treats transport
+    failures after Gmail mutations as uncertain and requires human verification
+    instead of replaying them. A malformed 2xx response has the same safety model.
     """
 
 
