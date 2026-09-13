@@ -164,6 +164,40 @@ class ApiFlowTests(unittest.TestCase):
         response=self.client.post('/api/attachments',files={"file":("payload.ps1",b"Write-Host hi","text/plain")})
         self.assertEqual(response.status_code,400)
 
+    def test_oversized_oauth_client_is_rejected_instead_of_truncated(self):
+        response = self.client.post(
+            "/api/accounts/google/start",
+            files={"client_secret": ("client.json", b"x" * (self.main.MAX_OAUTH_CLIENT_BYTES + 1), "application/json")},
+            data={"include_sheets": "true"},
+        )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertIn("larger than 2 MB", response.json()["detail"])
+
+    def test_attachment_changed_after_upload_is_not_served_or_queued(self):
+        uploaded = self.client.post(
+            "/api/attachments",
+            files={"file": ("note.txt", b"original", "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        attachment_id = uploaded.json()["id"]
+        item = self.main.store.get_attachment(attachment_id)
+        self.assertIsNotNone(item)
+        path = self.main.attachments_dir() / item["stored_name"]
+        path.write_bytes(b"changed-size")
+
+        content = self.client.get(f"/api/attachments/{attachment_id}/content")
+        self.assertEqual(content.status_code, 409, content.text)
+
+        message = self._message("attachment@example.com")
+        message["attachments"] = [attachment_id]
+        batch_id = self._batch_id([message])
+        queued = self.client.post("/api/campaigns", json={
+            "name":"Changed attachment","mode":"dry_run","batch_id":batch_id,"messages":[message],
+            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+        })
+        self.assertEqual(queued.status_code, 400, queued.text)
+        self.assertIn("changed attachment", queued.json()["detail"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
