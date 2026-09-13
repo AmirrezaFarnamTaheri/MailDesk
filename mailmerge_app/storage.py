@@ -115,7 +115,9 @@ class Store:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
+        # WAL is a persistent database setting and is established once during
+        # initialization. Reissuing PRAGMA journal_mode=WAL for every short-lived
+        # connection needlessly takes locks and adds latency under queue activity.
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
         return connection
@@ -166,6 +168,9 @@ class Store:
 
     def _initialize(self) -> None:
         with self._db() as db:
+            # journal_mode persists in the database file, so set it once here
+            # rather than on every connection in _connect().
+            db.execute("PRAGMA journal_mode=WAL")
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS templates (
@@ -282,6 +287,45 @@ class Store:
             self._ensure_column(db, "templates", "default_browser_sender_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "operations", "campaign_id", "TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE INDEX IF NOT EXISTS idx_operations_campaign ON operations(campaign_id, id)")
+
+            # Maintain campaign counters at the item transition itself. The old
+            # implementation GROUP BY-scanned every item after every message, which
+            # made large campaign execution quadratic. SQLite triggers run in the
+            # same transaction as update_item/retry_failed, keeping counters both
+            # constant-time and crash-consistent with queue status changes.
+            db.executescript(
+                """
+                DROP TRIGGER IF EXISTS trg_queue_items_campaign_counts;
+                CREATE TRIGGER trg_queue_items_campaign_counts
+                AFTER UPDATE OF status ON queue_items
+                WHEN OLD.status <> NEW.status
+                BEGIN
+                    UPDATE campaigns SET
+                        success = MAX(0, success
+                            - CASE WHEN OLD.status='Success' THEN 1 ELSE 0 END
+                            + CASE WHEN NEW.status='Success' THEN 1 ELSE 0 END),
+                        failed = MAX(0, failed
+                            - CASE WHEN OLD.status='Failed' THEN 1 ELSE 0 END
+                            + CASE WHEN NEW.status='Failed' THEN 1 ELSE 0 END),
+                        skipped = MAX(0, skipped
+                            - CASE WHEN OLD.status='Skipped' THEN 1 ELSE 0 END
+                            + CASE WHEN NEW.status='Skipped' THEN 1 ELSE 0 END)
+                    WHERE id=NEW.campaign_id;
+                END;
+                """
+            )
+
+            # Reconcile databases created by older versions once, before relying on
+            # incremental trigger maintenance. This is O(total queue rows) at
+            # startup instead of O(campaign size) after every processed message.
+            db.execute(
+                """
+                UPDATE campaigns SET
+                    success=(SELECT COUNT(*) FROM queue_items qi WHERE qi.campaign_id=campaigns.id AND qi.status='Success'),
+                    failed=(SELECT COUNT(*) FROM queue_items qi WHERE qi.campaign_id=campaigns.id AND qi.status='Failed'),
+                    skipped=(SELECT COUNT(*) FROM queue_items qi WHERE qi.campaign_id=campaigns.id AND qi.status='Skipped')
+                """
+            )
             self._seed(db)
             # Queued/Running work belonged to the previous process's event loop.
             # Never make it look active after a restart; require explicit review.
@@ -640,15 +684,13 @@ class Store:
                 db.execute("UPDATE campaigns SET status=?,completed_at=?,last_error=? WHERE id=?", (status, now, error, campaign_id))
             else:
                 db.execute("UPDATE campaigns SET status=?,completed_at='',last_error=? WHERE id=?", (status, error, campaign_id))
-        self.refresh_campaign_counts(campaign_id)
 
     def refresh_campaign_counts(self, campaign_id: str) -> None:
-        with self._db() as db:
-            counts = {row["status"]: row["n"] for row in db.execute("SELECT status,COUNT(*) n FROM queue_items WHERE campaign_id=? GROUP BY status", (campaign_id,)).fetchall()}
-            db.execute(
-                "UPDATE campaigns SET success=?,failed=?,skipped=? WHERE id=?",
-                (counts.get("Success", 0), counts.get("Failed", 0), counts.get("Skipped", 0), campaign_id),
-            )
+        # Kept as a compatibility hook for existing callers. Queue-item status
+        # transitions now maintain counters transactionally via
+        # trg_queue_items_campaign_counts, so rescanning the entire campaign here
+        # would reintroduce quadratic execution for large batches.
+        return None
 
     def retry_failed(self, campaign_id: str) -> int:
         with self._db() as db:
