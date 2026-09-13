@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import platform
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
 MAX_BROWSER_COMPOSE_URL_CHARS = 24_000
+_PROFILE_CACHE_TTL_SECONDS = 5.0
+_profile_cache: list[dict[str, object]] | None = None
+_profile_cache_at = 0.0
 
 
 def _first_existing(paths: list[Path | None]) -> Path | None:
@@ -27,7 +32,7 @@ def _browser_candidates():
         return [
             ("chrome", "Google Chrome", [local / "Google/Chrome/Application/chrome.exe", *(p / "Google/Chrome/Application/chrome.exe" for p in program_files)], [local / "Google/Chrome/User Data"]),
             ("edge", "Microsoft Edge", [*(p / "Microsoft/Edge/Application/msedge.exe" for p in program_files), local / "Microsoft/Edge/Application/msedge.exe"], [local / "Microsoft/Edge/User Data"]),
-            ("brave", "Brave", [*(p / "BraveSoftware/Brave-Browser/Application/brave.exe" for p in program_files), local / "BraveSoftware/Brave-Browser/Application/brave.exe"], [local / "BraveSoftware/Brave-Browser/User Data"]),
+            ("brave", "Brave", [*(p / "BraveSoftware/Brave-Browser/Application/brave.exe" for p in program_files), local / "BraveSoftware/Brave-Browser/User Data"]),
         ]
     if system == "Darwin":
         support = home / "Library/Application Support"
@@ -63,7 +68,12 @@ def _safe_profile_dir(user_data: Path, value: object) -> str | None:
     return value
 
 
-def discover_profiles() -> list[dict[str, object]]:
+def discover_profiles(*, force_refresh: bool = False) -> list[dict[str, object]]:
+    global _profile_cache, _profile_cache_at
+    now = time.monotonic()
+    if not force_refresh and _profile_cache is not None and now - _profile_cache_at < _PROFILE_CACHE_TTL_SECONDS:
+        return copy.deepcopy(_profile_cache)
+
     output: list[dict[str, object]] = []
     for browser_id, name, exe_candidates, data_candidates in _browser_candidates():
         executable = _first_existing(exe_candidates)
@@ -96,6 +106,8 @@ def discover_profiles() -> list[dict[str, object]]:
                     "profile_id": f"{browser_id}|{profile_dir}",
                 }
             )
+    _profile_cache = copy.deepcopy(output)
+    _profile_cache_at = now
     return output
 
 
