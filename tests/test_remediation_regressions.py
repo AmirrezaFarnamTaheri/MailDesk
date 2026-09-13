@@ -7,9 +7,11 @@ import hashlib
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from mailmerge_app import sheet_reader
 from mailmerge_app.gmail_client import GoogleOutcomeUncertainError, build_raw_message, send_message
 from mailmerge_app.storage import Store
 from mailmerge_app.template_engine import batch_fingerprint, is_valid_email, message_fingerprint
@@ -47,6 +49,27 @@ class GmailMutationSafetyTests(unittest.TestCase):
         parsed = email.message_from_bytes(base64.urlsafe_b64decode(padded.encode("ascii")))
         attachment = next(part for part in parsed.walk() if part.get_filename() == "note.txt")
         self.assertEqual(attachment.get_content_type(), "text/plain")
+
+
+class SpreadsheetSafetyRegressionTests(unittest.TestCase):
+    def test_utf8_bom_does_not_pollute_first_csv_header(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "people.csv"
+            path.write_bytes("\ufeffEmail,Name\nada@example.com,Ada\n".encode("utf-8"))
+            headers, rows, header_row = sheet_reader.table(path, "CSV", 1)
+            self.assertEqual(header_row, 1)
+            self.assertEqual(headers, ["Email", "Name"])
+            self.assertEqual(rows[0]["Email"], "ada@example.com")
+            self.assertEqual(sheet_reader.suggest_mappings(headers, rows).get("to"), "Email")
+
+    def test_xlsx_archive_expansion_is_rejected_before_xml_parsing(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "oversized.xlsx"
+            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("xl/worksheets/sheet1.xml", "x" * 128)
+            with patch.object(sheet_reader, "MAX_XLSX_UNCOMPRESSED_BYTES", 64):
+                with self.assertRaisesRegex(ValueError, "expands beyond"):
+                    sheet_reader.list_sheets(path)
 
 
 class TemplateSafetyRegressionTests(unittest.TestCase):
