@@ -44,6 +44,7 @@ class StoreSafetyTests(unittest.TestCase):
     def test_active_campaign_resources_cannot_be_considered_free(self):
         with tempfile.TemporaryDirectory() as td:
             old_data = os.environ.get("MAILMERGE_DATA_DIR")
+            old_skip = os.environ.get("MAILMERGE_SKIP_AUTO_BACKUP")
             os.environ["MAILMERGE_DATA_DIR"] = td
             os.environ["MAILMERGE_SKIP_AUTO_BACKUP"] = "1"
             try:
@@ -75,6 +76,10 @@ class StoreSafetyTests(unittest.TestCase):
                     os.environ.pop("MAILMERGE_DATA_DIR", None)
                 else:
                     os.environ["MAILMERGE_DATA_DIR"] = old_data
+                if old_skip is None:
+                    os.environ.pop("MAILMERGE_SKIP_AUTO_BACKUP", None)
+                else:
+                    os.environ["MAILMERGE_SKIP_AUTO_BACKUP"] = old_skip
 
     def test_existing_database_refuses_upgrade_when_backup_cannot_be_created(self):
         with tempfile.TemporaryDirectory() as td:
@@ -104,6 +109,9 @@ class ApiQueueSafetyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
+        cls.old_data = os.environ.get("MAILMERGE_DATA_DIR")
+        cls.old_no_browser = os.environ.get("MAILMERGE_NO_BROWSER")
+        cls.old_skip = os.environ.get("MAILMERGE_SKIP_AUTO_BACKUP")
         os.environ["MAILMERGE_DATA_DIR"] = cls.tmp.name
         os.environ["MAILMERGE_NO_BROWSER"] = "1"
         os.environ["MAILMERGE_SKIP_AUTO_BACKUP"] = "1"
@@ -116,6 +124,15 @@ class ApiQueueSafetyTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.client.__exit__(None, None, None)
         cls.tmp.cleanup()
+        for key, previous in (
+            ("MAILMERGE_DATA_DIR", cls.old_data),
+            ("MAILMERGE_NO_BROWSER", cls.old_no_browser),
+            ("MAILMERGE_SKIP_AUTO_BACKUP", cls.old_skip),
+        ):
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
 
     def _uncertain_campaign(self, suffix: str = "one") -> tuple[str, int]:
         fingerprint = f"uncertain-{suffix}"
@@ -135,18 +152,24 @@ class ApiQueueSafetyTests(unittest.TestCase):
 
         resolved = self.client.post(f"/api/campaigns/{campaign_id}/items/{item_id}/resolve-sent")
         self.assertEqual(resolved.status_code, 200, resolved.text)
-        item = next(i for i in resolved.json()["items"] if i["id"] == item_id)
+        body = resolved.json()
+        item = next(i for i in body["items"] if i["id"] == item_id)
         self.assertEqual(item["status"], "Success")
         self.assertEqual(item["remote_id"], "ConfirmedByUser")
+        self.assertEqual(body["status"], "Completed")
+        self.assertTrue(body["completed_at"])
         self.assertTrue(self.main.store.fingerprint_succeeded("uncertain-sent"))
 
-    def test_uncertain_item_can_be_resolved_not_sent_then_retried(self):
+    def test_uncertain_item_can_be_resolved_not_sent_as_completed_with_errors(self):
         campaign_id, item_id = self._uncertain_campaign("not-sent")
         resolved = self.client.post(f"/api/campaigns/{campaign_id}/items/{item_id}/resolve-not-sent")
         self.assertEqual(resolved.status_code, 200, resolved.text)
-        item = next(i for i in resolved.json()["items"] if i["id"] == item_id)
+        body = resolved.json()
+        item = next(i for i in body["items"] if i["id"] == item_id)
         self.assertEqual(item["status"], "Failed")
         self.assertIn("did not complete", item["error"])
+        self.assertEqual(body["status"], "CompletedWithErrors")
+        self.assertTrue(body["completed_at"])
 
     def test_campaign_worker_wrapper_serializes_campaigns(self):
         async def run_test():
@@ -166,6 +189,16 @@ class ApiQueueSafetyTests(unittest.TestCase):
             return maximum
 
         self.assertEqual(asyncio.run(run_test()), 1)
+
+    def test_worker_does_not_start_campaign_paused_while_waiting(self):
+        campaign = self.main.store.create_campaign(
+            {"name": "Paused", "mode": "dry_run", "batch_id": "paused123456789", "status": "Paused"},
+            [{"row_number": "2", "to": "p@example.com", "subject": "S", "body": "B", "fingerprint": "paused-fp", "attachments": []}],
+        )
+        asyncio.run(self.main._run_campaign_locked(campaign["id"]))
+        current = self.main.store.get_campaign(campaign["id"], include_items=True)
+        self.assertEqual(current["status"], "Paused")
+        self.assertEqual(current["items"][0]["status"], "Pending")
 
 
 if __name__ == "__main__":
