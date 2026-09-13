@@ -49,6 +49,14 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("state.selectedRows.size === 0", SAFETY_JS)
         self.assertIn("payload.selected_rows = [NO_ROWS_SENTINEL]", SAFETY_JS)
 
+    def test_queue_details_use_compact_bounded_api(self):
+        self.assertIn("/detail?limit=${QUEUE_DETAIL_ROW_LIMIT}&needs_review_limit=${QUEUE_DETAIL_ROW_LIMIT}", SAFETY_JS)
+        self.assertNotIn("const allItems = Array.isArray(campaign.items)", SAFETY_JS)
+
+    def test_final_review_rejects_subject_line_breaks(self):
+        self.assertIn("SUBJECT_LINE_ERROR", SAFETY_JS)
+        self.assertIn("/\\r|\\n/.test(els.reviewSubject.value)", SAFETY_JS)
+
 
 if __name__ == "__main__":
     unittest.main()
