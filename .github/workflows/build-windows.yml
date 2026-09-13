@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -100,3 +100,41 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pyproject = Get-Content -LiteralPath pyproject.toml -Raw
+          $match = [regex]::Match($pyproject, '(?m)^version\s*=\s*"([^"]+)"\s*$')
+          if (-not $match.Success) { throw 'Could not determine project version from pyproject.toml.' }
+          $version = $match.Groups[1].Value
+          $expectedTag = "v$version"
+          $tag = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF.Substring('refs/tags/'.Length)
+          } else {
+            $expectedTag
+          }
+          if ($tag -ne $expectedTag) {
+            throw "Release tag $tag does not match pyproject.toml version $version ($expectedTag expected)."
+          }
+
+          $installer = "dist/installer/MailDesk-$version-Setup.exe"
+          $assets = @('dist/MailDesk.exe', $installer, 'dist/SHA256SUMS.txt')
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset)) { throw "Missing release asset: $asset" }
+          }
+
+          if (gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null) {
+            gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
+            gh release edit $tag --title "MailDesk $version" --latest --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $tag @assets `
+              --target $env:GITHUB_SHA `
+              --title "MailDesk $version" `
+              --generate-notes `
+              --latest `
+              --repo $env:GITHUB_REPOSITORY
+          }
