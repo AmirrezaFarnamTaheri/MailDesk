@@ -7,7 +7,7 @@ import os
 import platform
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from ctypes import wintypes
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,12 +140,19 @@ class Store:
         if not target.exists():
             temporary = target.with_suffix(target.suffix + f".{uuid.uuid4().hex}.tmp")
             try:
-                with sqlite3.connect(self.path, timeout=30) as source, sqlite3.connect(temporary) as destination:
+                # sqlite3.Connection's context manager commits/rolls back but does
+                # not close the handle. closing() is required so Windows releases
+                # both database files before os.replace/unlink runs.
+                with closing(sqlite3.connect(self.path, timeout=30)) as source, closing(sqlite3.connect(temporary)) as destination:
                     source.execute("PRAGMA busy_timeout=5000")
                     source.backup(destination)
+                    destination.commit()
                 os.replace(temporary, target)
             except (OSError, sqlite3.Error) as exc:
-                temporary.unlink(missing_ok=True)
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 # A migration backup is a safety boundary, not a best-effort
                 # convenience. Do not mutate an existing database if its recovery
                 # snapshot cannot be created.
@@ -611,6 +618,19 @@ class Store:
     def set_campaign_status(self, campaign_id: str, status: str, *, error: str = "") -> None:
         now = _utc_now()
         with self._db() as db:
+            if status == "Paused":
+                counts = {
+                    row["status"]: row["n"]
+                    for row in db.execute(
+                        "SELECT status,COUNT(*) n FROM queue_items WHERE campaign_id=? GROUP BY status",
+                        (campaign_id,),
+                    ).fetchall()
+                }
+                unfinished = counts.get("Pending", 0) + counts.get("Retry", 0) + counts.get("NeedsReview", 0)
+                if counts and unfinished == 0:
+                    status = "CompletedWithErrors" if counts.get("Failed", 0) else "Completed"
+                    if status == "Completed":
+                        error = ""
             if status == "Running":
                 db.execute(
                     "UPDATE campaigns SET status=?,started_at=CASE WHEN started_at='' THEN ? ELSE started_at END,completed_at='',last_error=? WHERE id=?",
@@ -662,11 +682,15 @@ class Store:
         target = backups_dir() / f"{self.path.stem}-{stamp}.db"
         temporary = target.with_suffix(target.suffix + f".{uuid.uuid4().hex}.tmp")
         try:
-            with self._connect() as source, sqlite3.connect(temporary) as destination:
+            with closing(self._connect()) as source, closing(sqlite3.connect(temporary)) as destination:
                 source.backup(destination)
+                destination.commit()
             os.replace(temporary, target)
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
         return target
 
 
