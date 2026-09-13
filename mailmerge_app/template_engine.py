@@ -71,8 +71,10 @@ def render_text(
         return value, key
 
     rendered = text or ""
-    # Resolve nested-free conditionals repeatedly to support multiple blocks safely.
-    for _ in range(10):
+    # Each replacement removes a complete non-nested conditional block, so this
+    # loop always makes progress and has no need for an arbitrary block-count cap.
+    # Nested conditionals are intentionally outside this tiny template language.
+    while True:
         match = IF_RE.search(rendered)
         if not match:
             break
@@ -108,13 +110,22 @@ def split_addresses(value: str) -> list[str]:
 
 
 def is_valid_email(address: str) -> bool:
-    if not address or any(ch.isspace() for ch in address):
+    if not address or any(ch.isspace() for ch in address) or len(address) > 254:
         return False
     _, parsed = parseaddr(address)
     if parsed != address:
         return False
     local, sep, domain = parsed.rpartition("@")
-    return bool(sep and local and "." in domain and not domain.startswith(".") and not domain.endswith("."))
+    if not sep or not local or len(local.encode("utf-8")) > 64 or len(domain) > 253:
+        return False
+    if "." not in domain or domain.startswith(".") or domain.endswith("."):
+        return False
+    try:
+        ascii_domain = domain.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+    labels = ascii_domain.split(".")
+    return all(label and len(label) <= 63 and not label.startswith("-") and not label.endswith("-") for label in labels)
 
 
 def message_fingerprint(
