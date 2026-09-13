@@ -1,0 +1,30 @@
+[project]
+name = "maildesk"
+version = "0.2.0"
+description = "Local-first spreadsheet mail merge desktop application with reusable templates, Gmail drafts/sending, browser Gmail slots, queues, and Google Sheets snapshots."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "uvicorn>=0.35,<1",
+  "httpx>=0.28,<1",
+  "openpyxl>=3.1,<4",
+  "python-multipart>=0.0.20,<1",
+  "cryptography>=45,<47",
+  "pywebview>=5.4,<7",
+]
+
+[project.scripts]
+maildesk = "mailmerge_app.desktop:main"
+maildesk-server = "mailmerge_app.main:run"
+mailmerge-desk = "mailmerge_app.desktop:main"
+mailmerge-desk-server = "mailmerge_app.main:run"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["mailmerge_app*"]
+
+[tool.setuptools.package-data]
+mailmerge_app = ["static/*"]
