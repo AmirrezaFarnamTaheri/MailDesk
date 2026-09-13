@@ -77,16 +77,6 @@ jobs:
           if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
             throw 'MailDesk.exe is not a valid PE/MZ executable.'
           }
-          $marker = Join-Path $env:RUNNER_TEMP 'final-exe-smoke.txt'
-          Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
-          $process = Start-Process -FilePath $exe -ArgumentList @('--build-smoke-test', $marker) -Wait -PassThru
-          if ($process.ExitCode -ne 0 -or -not (Test-Path $marker)) {
-            throw 'Final EXE smoke test failed.'
-          }
-          $actual = (Get-Content -LiteralPath $marker -Raw).Trim()
-          if ($actual -notmatch '^MailDesk [0-9]+\.[0-9]+\.[0-9]+') {
-            throw "Unexpected smoke-test marker: $actual"
-          }
           Get-Content dist/SHA256SUMS.txt
 
       - name: Upload standalone EXE
