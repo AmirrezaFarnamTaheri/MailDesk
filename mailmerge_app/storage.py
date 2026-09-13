@@ -5,7 +5,6 @@ import ctypes
 import json
 import os
 import platform
-import shutil
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -63,7 +62,20 @@ class SecretBox:
 
     def _fernet(self) -> Fernet:
         if not self._fallback_key_path.exists():
-            self._fallback_key_path.write_bytes(Fernet.generate_key())
+            key = Fernet.generate_key()
+            try:
+                fd = os.open(self._fallback_key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                pass
+            else:
+                try:
+                    with os.fdopen(fd, "wb") as output:
+                        output.write(key)
+                        output.flush()
+                        os.fsync(output.fileno())
+                except Exception:
+                    self._fallback_key_path.unlink(missing_ok=True)
+                    raise
             try:
                 os.chmod(self._fallback_key_path, 0o600)
             except OSError:
@@ -76,9 +88,12 @@ class SecretBox:
         return base64.b64encode(encrypted).decode("ascii")
 
     def decrypt(self, encoded: str) -> dict[str, Any]:
-        encrypted = base64.b64decode(encoded.encode("ascii"))
+        encrypted = base64.b64decode(encoded.encode("ascii"), validate=True)
         raw = self._unprotect_windows(encrypted) if platform.system() == "Windows" else self._fernet().decrypt(encrypted)
-        return json.loads(raw.decode("utf-8"))
+        decoded = json.loads(raw.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise ValueError("Stored secret payload is invalid.")
+        return decoded
 
 
 class Store:
@@ -109,14 +124,20 @@ class Store:
     def _backup_before_upgrade(self) -> None:
         if not self.path.exists() or self.path.stat().st_size == 0 or os.getenv("MAILMERGE_SKIP_AUTO_BACKUP") == "1":
             return
-        # One startup backup per database file per day is enough for local migration recovery.
+        # Copying only the main .db file is unsafe when SQLite is in WAL mode;
+        # committed pages may still live in -wal. The SQLite backup API snapshots a
+        # consistent database including WAL content before migrations run.
         stamp = datetime.now().strftime("%Y%m%d")
         target = backups_dir() / f"{self.path.stem}-startup-{stamp}.db"
         if not target.exists():
+            temporary = target.with_suffix(target.suffix + f".{uuid.uuid4().hex}.tmp")
             try:
-                shutil.copy2(self.path, target)
-            except OSError:
-                pass
+                with sqlite3.connect(self.path, timeout=30) as source, sqlite3.connect(temporary) as destination:
+                    source.execute("PRAGMA busy_timeout=5000")
+                    source.backup(destination)
+                os.replace(temporary, target)
+            except (OSError, sqlite3.Error):
+                temporary.unlink(missing_ok=True)
         backups = sorted(backups_dir().glob(f"{self.path.stem}-startup-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in backups[7:]:
             try:
@@ -206,6 +227,7 @@ class Store:
                     completed_at TEXT NOT NULL DEFAULT '',
                     last_error TEXT NOT NULL DEFAULT ''
                 );
+                CREATE INDEX IF NOT EXISTS idx_campaigns_due ON campaigns(status, scheduled_at);
                 CREATE TABLE IF NOT EXISTS queue_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -240,6 +262,7 @@ class Store:
             self._ensure_column(db, "templates", "default_account", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "templates", "default_browser_sender_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "operations", "campaign_id", "TEXT NOT NULL DEFAULT ''")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_operations_campaign ON operations(campaign_id, id)")
             self._seed(db)
             # Running means the process died or restarted mid-flight; never silently continue real sends.
             db.execute(
@@ -311,7 +334,7 @@ class Store:
     def _decode_template(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
             row["attachment_ids"] = json.loads(row.get("attachment_ids") or "[]")
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             row["attachment_ids"] = []
         return row
 
@@ -333,7 +356,8 @@ class Store:
                 "INSERT INTO snippets(id,name,content,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,content=excluded.content,updated_at=excluded.updated_at",
                 (item["id"], item["name"], item["content"], created_at, now),
             )
-            return dict(db.execute("SELECT * FROM snippets WHERE id=?", (item["id"],)).fetchone())
+            row = db.execute("SELECT * FROM snippets WHERE id=?", (item["id"],)).fetchone()
+            return dict(row)
 
     def delete_snippet(self, snippet_id: str) -> None:
         with self._db() as db:
@@ -387,11 +411,13 @@ class Store:
                    VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET label=excluded.label,browser_id=excluded.browser_id,profile_dir=excluded.profile_dir,gmail_slot=excluded.gmail_slot,expected_email=excluded.expected_email,verified_at=excluded.verified_at,updated_at=excluded.updated_at""",
                 (sender_id, item["label"], item["browser_id"], item["profile_dir"], int(item["gmail_slot"]), item["expected_email"], verified_at, created_at, now),
             )
-            return dict(db.execute("SELECT * FROM browser_senders WHERE id=?", (sender_id,)).fetchone())
+            row = db.execute("SELECT * FROM browser_senders WHERE id=?", (sender_id,)).fetchone()
+            return dict(row)
 
     def mark_browser_sender_verified(self, sender_id: str) -> None:
+        now = _utc_now()
         with self._db() as db:
-            db.execute("UPDATE browser_senders SET verified_at=?,updated_at=? WHERE id=?", (_utc_now(), _utc_now(), sender_id))
+            db.execute("UPDATE browser_senders SET verified_at=?,updated_at=? WHERE id=?", (now, now, sender_id))
 
     def delete_browser_sender(self, sender_id: str) -> None:
         with self._db() as db:
@@ -404,11 +430,12 @@ class Store:
                 "INSERT INTO attachments(id,name,stored_name,mime_type,size,created_at) VALUES(?,?,?,?,?,?)",
                 (item["id"], item["name"], item["stored_name"], item.get("mime_type", ""), int(item["size"]), _utc_now()),
             )
-            return dict(db.execute("SELECT * FROM attachments WHERE id=?", (item["id"],)).fetchone())
+            row = db.execute("SELECT * FROM attachments WHERE id=?", (item["id"],)).fetchone()
+            return dict(row)
 
     def list_attachments(self) -> list[dict[str, Any]]:
         with self._db() as db:
-            rows = db.execute("SELECT * FROM attachments ORDER BY created_at DESC").fetchall()
+            rows = db.execute("SELECT * FROM attachments ORDER BY created_at DESC, id DESC").fetchall()
         return [dict(row) for row in rows]
 
     def get_attachment(self, attachment_id: str) -> dict[str, Any] | None:
@@ -417,11 +444,12 @@ class Store:
         return dict(row) if row else None
 
     def delete_attachment(self, attachment_id: str) -> dict[str, Any] | None:
-        item = self.get_attachment(attachment_id)
-        if item:
-            with self._db() as db:
-                db.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
-        return item
+        with self._db() as db:
+            row = db.execute("SELECT * FROM attachments WHERE id=?", (attachment_id,)).fetchone()
+            if not row:
+                return None
+            db.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
+            return dict(row)
 
     # ---------- operations / duplicate protection ----------
     def fingerprint_succeeded(self, fingerprint: str) -> bool:
@@ -492,12 +520,14 @@ class Store:
     def _decode_queue_item(self, item: dict[str, Any]) -> dict[str, Any]:
         try:
             item["attachments"] = json.loads(item.pop("attachments_json", "[]") or "[]")
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             item["attachments"] = []
         return item
 
     def queue_items(self, campaign_id: str, statuses: Iterable[str] = ("Pending", "Retry")) -> list[dict[str, Any]]:
         values = tuple(statuses)
+        if not values:
+            return []
         placeholders = ",".join("?" for _ in values)
         with self._db() as db:
             rows = db.execute(
@@ -517,11 +547,14 @@ class Store:
         now = _utc_now()
         with self._db() as db:
             if status == "Running":
-                db.execute("UPDATE campaigns SET status=?,started_at=CASE WHEN started_at='' THEN ? ELSE started_at END,last_error=? WHERE id=?", (status, now, error, campaign_id))
+                db.execute(
+                    "UPDATE campaigns SET status=?,started_at=CASE WHEN started_at='' THEN ? ELSE started_at END,completed_at='',last_error=? WHERE id=?",
+                    (status, now, error, campaign_id),
+                )
             elif status in {"Completed", "CompletedWithErrors", "Cancelled"}:
                 db.execute("UPDATE campaigns SET status=?,completed_at=?,last_error=? WHERE id=?", (status, now, error, campaign_id))
             else:
-                db.execute("UPDATE campaigns SET status=?,last_error=? WHERE id=?", (status, error, campaign_id))
+                db.execute("UPDATE campaigns SET status=?,completed_at='',last_error=? WHERE id=?", (status, error, campaign_id))
         self.refresh_campaign_counts(campaign_id)
 
     def refresh_campaign_counts(self, campaign_id: str) -> None:
@@ -534,9 +567,11 @@ class Store:
 
     def retry_failed(self, campaign_id: str) -> int:
         with self._db() as db:
-            cursor = db.execute("UPDATE queue_items SET status='Retry',error='',remote_id='',updated_at=? WHERE campaign_id=? AND status='Failed'", (_utc_now(), campaign_id))
-        self.set_campaign_status(campaign_id, "Paused")
-        return cursor.rowcount
+            cursor = db.execute(
+                "UPDATE queue_items SET status='Retry',error='',remote_id='',updated_at=? WHERE campaign_id=? AND status='Failed'",
+                (_utc_now(), campaign_id),
+            )
+            return cursor.rowcount
 
     def due_campaigns(self) -> list[str]:
         now = _utc_now()
@@ -558,11 +593,15 @@ class Store:
             )
 
     def backup(self) -> Path:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         target = backups_dir() / f"{self.path.stem}-{stamp}.db"
-        with self._connect() as source:
-            with sqlite3.connect(target) as destination:
+        temporary = target.with_suffix(target.suffix + f".{uuid.uuid4().hex}.tmp")
+        try:
+            with self._connect() as source, sqlite3.connect(temporary) as destination:
                 source.backup(destination)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
         return target
 
 
