@@ -6,8 +6,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_JS = (ROOT / "mailmerge_app" / "static" / "app.js").read_text(encoding="utf-8")
-INDEX_HTML = (ROOT / "mailmerge_app" / "static" / "index.html").read_text(encoding="utf-8")
+STATIC = ROOT / "mailmerge_app" / "static"
+APP_JS = (STATIC / "app.js").read_text(encoding="utf-8")
+SAFETY_JS = (STATIC / "safety.js").read_text(encoding="utf-8")
+INDEX_HTML = (STATIC / "index.html").read_text(encoding="utf-8")
 
 
 class FrontendIntegrityTests(unittest.TestCase):
@@ -15,11 +17,17 @@ class FrontendIntegrityTests(unittest.TestCase):
         match = re.search(r"const ids\s*=\s*\[(.*?)\];", APP_JS, flags=re.S)
         self.assertIsNotNone(match, "Could not find the frontend element registry")
         declared = set(re.findall(r"['\"]([A-Za-z][A-Za-z0-9_-]*)['\"]", match.group(1)))
-        referenced = set(re.findall(r"\bels\.([A-Za-z_$][A-Za-z0-9_$]*)", APP_JS))
+        referenced = set(re.findall(r"\bels\.([A-Za-z_$][A-Za-z0-9_$]*)", APP_JS + "\n" + SAFETY_JS))
         html_ids = set(re.findall(r"\bid=[\"']([^\"']+)[\"']", INDEX_HTML))
 
-        self.assertEqual(sorted(referenced - declared), [], "app.js references elements that are never registered")
+        self.assertEqual(sorted(referenced - declared), [], "frontend JavaScript references elements that are never registered")
         self.assertEqual(sorted(declared - html_ids), [], "registered frontend elements are missing from index.html")
+
+    def test_safety_extension_loads_after_main_application(self):
+        app_position = INDEX_HTML.find('/static/app.js')
+        safety_position = INDEX_HTML.find('/static/safety.js')
+        self.assertGreaterEqual(app_position, 0)
+        self.assertGreater(safety_position, app_position)
 
     def test_queue_gate_tracks_stale_render_state(self):
         self.assertIn("!state.renderDirty", APP_JS)
@@ -30,6 +38,11 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("Content-Security-Policy", APP_JS)
         self.assertIn("default-src 'none'", APP_JS)
         self.assertIn("connect-src 'none'", APP_JS)
+
+    def test_uncertain_queue_resolution_and_plain_text_html_guard_are_present(self):
+        self.assertIn("resolve-sent", SAFETY_JS)
+        self.assertIn("resolve-not-sent", SAFETY_JS)
+        self.assertIn("message.body_html = ''", SAFETY_JS)
 
 
 if __name__ == "__main__":
