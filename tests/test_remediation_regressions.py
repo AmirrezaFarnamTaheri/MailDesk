@@ -38,6 +38,14 @@ class GmailMutationSafetyTests(unittest.TestCase):
         with self.assertRaises(GoogleOutcomeUncertainError):
             asyncio.run(send_message({"access_token": "token"}, "raw-message", http=http))
 
+    def test_cancellation_during_send_is_uncertain(self):
+        http = MagicMock()
+        http.post = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with self.assertRaises(GoogleOutcomeUncertainError) as raised:
+            asyncio.run(send_message({"access_token": "token"}, "raw-message", http=http))
+        self.assertIn("outcome is uncertain", str(raised.exception))
+
     def test_mime_parameters_do_not_downgrade_attachment_type(self):
         raw = build_raw_message(
             "to@example.com",
