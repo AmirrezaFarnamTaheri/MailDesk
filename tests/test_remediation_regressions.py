@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import tempfile
 import unittest
@@ -51,6 +52,32 @@ class TemplateSafetyRegressionTests(unittest.TestCase):
             "send", "sender@example.com", "to@example.com", "", "", "A", "B|C"
         )
         self.assertNotEqual(left, right)
+
+    def test_message_fingerprint_preserves_legacy_hash_when_unambiguous(self):
+        fields = [
+            "send",
+            "sender@example.com",
+            "to@example.com",
+            "",
+            "",
+            "Subject",
+            "Body",
+            "<p>Body</p>",
+            "attachment-a,attachment-b",
+        ]
+        legacy = hashlib.sha256("|".join(fields).encode("utf-8")).hexdigest()
+        actual = message_fingerprint(
+            "send",
+            "sender@example.com",
+            "to@example.com",
+            "",
+            "",
+            "Subject",
+            "Body",
+            "<p>Body</p>",
+            ["attachment-b", "attachment-a"],
+        )
+        self.assertEqual(actual, legacy)
 
     def test_batch_fingerprint_has_no_delimiter_collision(self):
         left = batch_fingerprint([
