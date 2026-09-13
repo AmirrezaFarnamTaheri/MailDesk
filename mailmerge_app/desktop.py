@@ -51,8 +51,24 @@ def main() -> None:
             raise SystemExit("--build-smoke-test requires an output path")
         marker = Path(args[index + 1])
         marker.parent.mkdir(parents=True, exist_ok=True)
+
+        # The frozen-artifact probe must exercise the dependency that actually
+        # creates the production GUI. Merely importing this module and writing a
+        # marker can pass even when PyInstaller omitted/broke pywebview/pythonnet.
+        # The packaging script watches the marker with a hard timeout and kills the
+        # one-file process tree afterwards, so use os._exit to avoid GUI/CLR
+        # interpreter-shutdown hangs on headless Windows runners.
+        try:
+            import webview  # type: ignore  # noqa: F401
+        except BaseException as exc:
+            marker.write_text(
+                f"ERROR: pywebview import failed: {type(exc).__name__}: {exc}",
+                encoding="utf-8",
+            )
+            os._exit(2)
+
         marker.write_text(f"MailDesk {APP_VERSION}", encoding="utf-8")
-        return
+        os._exit(0)
 
     lock = acquire_instance_lock()
     if lock is None:
