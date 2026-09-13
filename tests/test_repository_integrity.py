@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import tomllib
 import unittest
 from pathlib import Path
@@ -49,6 +51,19 @@ class RepositoryIntegrityTests(unittest.TestCase):
         self.assertIn("root / 'packaging' / 'desktop_entry.py'", spec_text)
         self.assertNotIn("root / 'mailmerge_app' / 'desktop.py'", spec_text)
         self.assertIn("from mailmerge_app.desktop import main", entry_text)
+
+    def test_desktop_script_can_bootstrap_without_package_context(self):
+        expected = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "mailmerge_app" / "desktop.py"), "--version"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), f"MailDesk {expected}")
 
 
 if __name__ == "__main__":
