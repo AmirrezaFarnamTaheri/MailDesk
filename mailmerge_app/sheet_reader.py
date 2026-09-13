@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import zipfile
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from openpyxl import load_workbook
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm", ".csv"}
 MAX_ROWS = 100_000
 MAX_CSV_FIELD_BYTES = 4 * 1024 * 1024
+MAX_XLSX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
+MAX_XLSX_ENTRIES = 20_000
 
 
 def _display_value(value: Any) -> str:
@@ -32,12 +35,31 @@ def _display_value(value: Any) -> str:
     return str(value)
 
 
+def _validate_xlsx_archive(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            if len(infos) > MAX_XLSX_ENTRIES:
+                raise ValueError(f"Spreadsheet archive contains too many files ({len(infos):,}).")
+            uncompressed = sum(info.file_size for info in infos)
+            if uncompressed > MAX_XLSX_UNCOMPRESSED_BYTES:
+                raise ValueError(
+                    f"Spreadsheet expands to {uncompressed / 1024 / 1024:.1f} MB; the safety limit is "
+                    f"{MAX_XLSX_UNCOMPRESSED_BYTES // 1024 // 1024} MB."
+                )
+            if any(info.flag_bits & 0x1 for info in infos):
+                raise ValueError("Encrypted spreadsheet archives are not supported.")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("The spreadsheet is not a valid XLSX/XLSM archive.") from exc
+
+
 def list_sheets(path: Path) -> list[str]:
     suffix = path.suffix.lower()
     if suffix == ".csv":
         return [path.stem]
     if suffix not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported spreadsheet type: {suffix}")
+    _validate_xlsx_archive(path)
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         return list(wb.sheetnames)
@@ -77,6 +99,7 @@ def _csv_rows(path: Path) -> list[list[str]]:
 
 
 def _xlsx_rows(path: Path, sheet: str) -> list[list[str]]:
+    _validate_xlsx_archive(path)
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         if sheet not in wb.sheetnames:
@@ -116,6 +139,8 @@ def table(path: Path, sheet: str, header_row: int | None = None) -> tuple[list[s
     selected_header = header_row or detect_header_row(rows)
     if selected_header < 1 or selected_header > len(rows):
         raise ValueError("Header row is outside the spreadsheet.")
+    if len(rows) - selected_header > MAX_ROWS:
+        raise ValueError(f"Spreadsheet exceeds the {MAX_ROWS:,}-data-row safety limit.")
 
     header_cells = rows[selected_header - 1]
     headers: list[str] = []
