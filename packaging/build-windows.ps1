@@ -51,15 +51,34 @@ function Sign-Artifact([string]$Path) {
     if ($LASTEXITCODE -ne 0) { throw "Signing failed for $Path" }
 }
 
+function Invoke-FrozenSmokeTest([string]$Executable, [string]$Marker, [int]$TimeoutSeconds = 45) {
+    Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
+    $process = Start-Process -FilePath $Executable -ArgumentList @('--build-smoke-test', $Marker) -PassThru
+    try {
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+            throw "Frozen executable smoke test timed out after $TimeoutSeconds seconds."
+        }
+        if ($process.ExitCode -ne 0) {
+            $detail = if (Test-Path -LiteralPath $Marker) { (Get-Content -LiteralPath $Marker -Raw).Trim() } else { 'no marker was written' }
+            throw "The packaged executable failed its startup smoke test with exit code $($process.ExitCode): $detail"
+        }
+        if (-not (Test-Path -LiteralPath $Marker)) {
+            throw 'The packaged executable did not write its smoke-test marker.'
+        }
+    }
+    finally {
+        if (-not $process.HasExited) {
+            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+        }
+        $process.Dispose()
+    }
+}
+
 Sign-Artifact $Exe
 
-# Execute the GUI-subsystem frozen binary in a headless marker-file path. Using
-# Start-Process -Wait is reliable for a windowed executable where stdout is not.
 $SmokeMarker = Join-Path $env:TEMP "maildesk-smoke-$PID.txt"
-Remove-Item -LiteralPath $SmokeMarker -Force -ErrorAction SilentlyContinue
-$SmokeProcess = Start-Process -FilePath $Exe -ArgumentList @('--build-smoke-test', $SmokeMarker) -Wait -PassThru
-if ($SmokeProcess.ExitCode -ne 0) { throw "The packaged executable failed its startup smoke test with exit code $($SmokeProcess.ExitCode)." }
-if (-not (Test-Path -LiteralPath $SmokeMarker)) { throw 'The packaged executable did not write its smoke-test marker.' }
+Invoke-FrozenSmokeTest -Executable $Exe -Marker $SmokeMarker
 $VersionOutput = (Get-Content -LiteralPath $SmokeMarker -Raw).Trim()
 Remove-Item -LiteralPath $SmokeMarker -Force -ErrorAction SilentlyContinue
 $ExpectedVersionOutput = "MailDesk $Version"
