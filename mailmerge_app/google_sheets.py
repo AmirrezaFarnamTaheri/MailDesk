@@ -33,8 +33,10 @@ async def snapshot_spreadsheet(token: dict[str, Any], spreadsheet_id: str, desti
         grid = properties.get("gridProperties", {})
         if not isinstance(grid, dict):
             grid = {}
-        row_count = max(1, int(grid.get("rowCount") or 1))
-        column_count = max(1, int(grid.get("columnCount") or 1))
+        # Older/mocked metadata may omit gridProperties. Use one bounded chunk as
+        # a compatibility fallback rather than making an unbounded values request.
+        row_count = max(1, int(grid.get("rowCount") or MAX_CHUNK_ROWS))
+        column_count = max(1, int(grid.get("columnCount") or 26))
         if row_count > MAX_SNAPSHOT_ROWS:
             raise ValueError(
                 f"Worksheet {source_title!r} has {row_count:,} rows; the safety limit is {MAX_SNAPSHOT_ROWS:,}."
