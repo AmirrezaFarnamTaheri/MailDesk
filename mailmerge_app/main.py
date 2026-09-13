@@ -42,6 +42,7 @@ from .gmail_client import (
     token_is_valid,
 )
 from .google_sheets import snapshot_spreadsheet
+from .instance import acquire_instance_lock
 from .paths import attachments_dir, imports_dir
 from .sheet_reader import SUPPORTED_EXTENSIONS, column_profiles, list_sheets, suggest_mappings, table
 from .storage import Store
@@ -557,8 +558,6 @@ async def accounts_list() -> list[dict[str, Any]]:
             scopes = str(account[0].get("scope") or "") if account else ""
             output.append({**item, "gmail": GMAIL_SCOPE in scopes, "sheets": SHEETS_SCOPE in scopes, "credential_error": ""})
         except Exception:
-            # One corrupt/decrypt-failed account must not make the whole Accounts
-            # page unusable; keep it visible so the user can disconnect/reconnect.
             output.append({**item, "gmail": False, "sheets": False, "credential_error": "Stored credentials could not be read. Disconnect and reconnect this account."})
     return output
 
@@ -986,16 +985,15 @@ async def _run_campaign(campaign_id: str) -> None:
     global campaign_run_lock
     if campaign_run_lock is None:
         campaign_run_lock = asyncio.Lock()
-    # Serialize side-effecting campaigns. This makes duplicate fingerprint checks
-    # meaningful across simultaneously queued campaigns and prevents multiple local
-    # campaigns from defeating each other's configured Gmail/browser pacing.
     async with campaign_run_lock:
         await _run_campaign_locked(campaign_id)
 
 
 async def _run_campaign_locked(campaign_id: str) -> None:
     campaign = store.get_campaign(campaign_id)
-    if not campaign or campaign["status"] in {"Cancelled", "Completed", "CompletedWithErrors"}:
+    # A task can wait behind another campaign long enough for the user to pause or
+    # cancel it. Re-check the persisted state only after acquiring the global lock.
+    if not campaign or campaign["status"] not in {"Queued", "Running"}:
         return
     mode = campaign["mode"]
     account_label = campaign.get("account", "")
@@ -1281,12 +1279,18 @@ def _utc_now() -> str:
 
 
 def run() -> None:
-    host = "127.0.0.1"
-    port = int(os.getenv("MAILMERGE_PORT", "8765"))
-    url = f"http://{host}:{port}/"
-    if os.getenv("MAILMERGE_NO_BROWSER") != "1":
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    lock = acquire_instance_lock()
+    if lock is None:
+        raise RuntimeError("Another MailDesk instance is already running on this machine.")
+    try:
+        host = "127.0.0.1"
+        port = int(os.getenv("MAILMERGE_PORT", "8765"))
+        url = f"http://{host}:{port}/"
+        if os.getenv("MAILMERGE_NO_BROWSER") != "1":
+            threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    finally:
+        lock.close()
 
 
 if __name__ == "__main__":
