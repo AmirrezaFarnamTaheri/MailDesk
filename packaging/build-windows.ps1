@@ -21,6 +21,8 @@ $Python = Join-Path $Root '.venv-build\Scripts\python.exe'
 if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed.' }
 & $Python -m pip install -r requirements-dev.txt
 if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed.' }
+& $Python -m pip check
+if ($LASTEXITCODE -ne 0) { throw 'Installed build dependencies are inconsistent.' }
 
 & $Python -m compileall -q mailmerge_app
 if ($LASTEXITCODE -ne 0) { throw 'Python compilation check failed.' }
@@ -47,30 +49,51 @@ if ($HasSigningCertificate -xor $HasSigningPassword) {
 function Sign-Artifact([string]$Path) {
     if (-not $HasSigningCertificate) { return }
     $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
-    & $signtool sign /fd SHA256 /f $CertPfx /p $CertPwd /tr http://timestamp.digicert.com /td SHA256 $Path
+    & $signtool sign /fd SHA256 /f $CertPfx /p $CertPwd /tr https://timestamp.digicert.com /td SHA256 $Path
     if ($LASTEXITCODE -ne 0) { throw "Signing failed for $Path" }
+}
+
+function Stop-ProcessTree([Diagnostics.Process]$Process) {
+    if ($Process.HasExited) { return }
+    try {
+        & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+    }
+    catch {
+        try { $Process.Kill($true) } catch { }
+    }
 }
 
 function Invoke-FrozenSmokeTest([string]$Executable, [string]$Marker, [int]$TimeoutSeconds = 45) {
     Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
     $process = Start-Process -FilePath $Executable -ArgumentList @('--build-smoke-test', $Marker) -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     try {
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
-            throw "Frozen executable smoke test timed out after $TimeoutSeconds seconds."
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (Test-Path -LiteralPath $Marker) {
+                # The marker is the frozen-child startup contract. A PyInstaller
+                # one-file GUI parent can remain resident while bundled GUI/CLR
+                # teardown completes on a headless runner, so process exit is not
+                # a reliable success signal. Validate the marker, then terminate
+                # the probe tree explicitly in the finally block.
+                $detail = (Get-Content -LiteralPath $Marker -Raw).Trim()
+                if ($detail.StartsWith('ERROR:')) {
+                    throw "The packaged executable reported a startup error: $detail"
+                }
+                if ([string]::IsNullOrWhiteSpace($detail)) {
+                    Start-Sleep -Milliseconds 100
+                    continue
+                }
+                return
+            }
+            if ($process.HasExited) {
+                throw "The packaged executable exited with code $($process.ExitCode) before writing its smoke-test marker."
+            }
+            Start-Sleep -Milliseconds 200
         }
-        if ($process.ExitCode -ne 0) {
-            $detail = if (Test-Path -LiteralPath $Marker) { (Get-Content -LiteralPath $Marker -Raw).Trim() } else { 'no marker was written' }
-            throw "The packaged executable failed its startup smoke test with exit code $($process.ExitCode): $detail"
-        }
-        if (-not (Test-Path -LiteralPath $Marker)) {
-            throw 'The packaged executable did not write its smoke-test marker.'
-        }
+        throw "Frozen executable did not produce its startup marker within $TimeoutSeconds seconds."
     }
     finally {
-        if (-not $process.HasExited) {
-            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
-        }
+        Stop-ProcessTree $process
         $process.Dispose()
     }
 }
