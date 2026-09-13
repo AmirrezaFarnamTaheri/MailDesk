@@ -274,6 +274,53 @@ class ApiQueueSafetyTests(unittest.TestCase):
         self.assertIs(first_http, second_http)
         self.assertTrue(first_http.is_closed)
 
+    def test_compact_detail_omits_message_bodies_and_includes_review_rows(self):
+        campaign = self.main.store.create_campaign(
+            {"name": "Compact detail", "mode": "dry_run", "batch_id": "compact-detail-123", "status": "Paused"},
+            [
+                {"row_number": "2", "to": "one@example.com", "subject": "S1", "body": "A" * 10000, "body_html": "<p>A</p>", "fingerprint": "compact-1", "attachments": []},
+                {"row_number": "3", "to": "two@example.com", "subject": "S2", "body": "B" * 10000, "body_html": "<p>B</p>", "fingerprint": "compact-2", "attachments": []},
+                {"row_number": "4", "to": "three@example.com", "subject": "S3", "body": "C" * 10000, "body_html": "<p>C</p>", "fingerprint": "compact-3", "attachments": []},
+            ],
+        )
+        third = campaign["items"][2]
+        self.main.store.update_item(third["id"], status="NeedsReview", error="verify me")
+
+        response = self.client.get(f"/api/campaigns/{campaign['id']}/detail", params={"limit": 1, "needs_review_limit": 2})
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertEqual(detail["total"], 3)
+        self.assertEqual(detail["needs_review_total"], 1)
+        self.assertEqual(len(detail["items"]), 2)
+        self.assertEqual({item["id"] for item in detail["items"]}, {campaign["items"][0]["id"], third["id"]})
+        for item in detail["items"]:
+            self.assertNotIn("body", item)
+            self.assertNotIn("body_html", item)
+            self.assertNotIn("attachments", item)
+
+    def test_duplicate_preload_preserves_same_campaign_skip_semantics(self):
+        fingerprint = "bulk-duplicate-fingerprint"
+        campaign = self.main.store.create_campaign(
+            {
+                "name": "Bulk duplicate",
+                "mode": "dry_run",
+                "batch_id": "bulk-duplicate-123",
+                "status": "Queued",
+                "throttle_ms": 0,
+                "skip_duplicates": True,
+            },
+            [
+                {"row_number": "2", "to": "same@example.com", "subject": "S", "body": "B", "fingerprint": fingerprint, "attachments": []},
+                {"row_number": "3", "to": "same@example.com", "subject": "S", "body": "B", "fingerprint": fingerprint, "attachments": []},
+            ],
+        )
+        with patch.object(self.main.store, "fingerprint_succeeded", side_effect=AssertionError("per-item lookup should not be used")):
+            asyncio.run(self.main._run_campaign_locked(campaign["id"]))
+        current = self.main.store.get_campaign(campaign["id"], include_items=True)
+        self.assertEqual(current["status"], "Completed")
+        self.assertEqual([item["status"] for item in current["items"]], ["Success", "Skipped"])
+        self.assertEqual((current["success"], current["skipped"]), (1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()
