@@ -11,7 +11,7 @@ import webbrowser
 import httpx
 import uvicorn
 
-from .main import APP_VERSION, app
+from .main import APP_VERSION, app, store
 
 LOCK_PORT = 47631
 APP_PORT = 8765
@@ -47,6 +47,20 @@ def _wait_ready(url: str, timeout: float = 12) -> None:
             pass
         time.sleep(0.15)
     raise RuntimeError("MailDesk local server did not start.")
+
+
+def _recover_orphaned_queued_campaigns() -> None:
+    # A queued task lives only in the previous process's event loop. After a
+    # restart, leaving its persisted status as Queued would make the UI report
+    # active work that can never run. Scheduled campaigns remain scheduled; work
+    # that had already started is normalized to Paused by Store initialization.
+    for campaign in store.list_campaigns(limit=10_000):
+        if campaign.get("status") == "Queued":
+            store.set_campaign_status(
+                str(campaign["id"]),
+                "Paused",
+                error="Paused after application restart; review and resume explicitly.",
+            )
 
 
 def main() -> None:
@@ -89,6 +103,8 @@ def main() -> None:
     try:
         if _port_in_use(APP_PORT):
             raise RuntimeError(f"Port {APP_PORT} is already in use by another local application.")
+
+        _recover_orphaned_queued_campaigns()
 
         config = uvicorn.Config(app, host="127.0.0.1", port=APP_PORT, log_level="warning")
         server = uvicorn.Server(config)
