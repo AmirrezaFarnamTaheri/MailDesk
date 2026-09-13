@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import email
 import hashlib
 import os
 import tempfile
@@ -8,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from mailmerge_app.gmail_client import GoogleOutcomeUncertainError, send_message
+from mailmerge_app.gmail_client import GoogleOutcomeUncertainError, build_raw_message, send_message
 from mailmerge_app.storage import Store
 from mailmerge_app.template_engine import batch_fingerprint, is_valid_email, message_fingerprint
 
@@ -33,6 +35,18 @@ class GmailMutationSafetyTests(unittest.TestCase):
 
         with self.assertRaises(GoogleOutcomeUncertainError):
             asyncio.run(send_message({"access_token": "token"}, "raw-message", http=http))
+
+    def test_mime_parameters_do_not_downgrade_attachment_type(self):
+        raw = build_raw_message(
+            "to@example.com",
+            "Subject",
+            "Body",
+            attachments=[("note.txt", b"hello", "text/plain; charset=utf-8")],
+        )
+        padded = raw + "=" * (-len(raw) % 4)
+        parsed = email.message_from_bytes(base64.urlsafe_b64decode(padded.encode("ascii")))
+        attachment = next(part for part in parsed.walk() if part.get_filename() == "note.txt")
+        self.assertEqual(attachment.get_content_type(), "text/plain")
 
 
 class TemplateSafetyRegressionTests(unittest.TestCase):
