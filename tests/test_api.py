@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from fastapi.testclient import TestClient
@@ -40,6 +41,27 @@ class ApiFlowTests(unittest.TestCase):
         ws.append(["Name", "Email"]); ws.append(["Ada", "ada@example.com"]); ws.append(["Lin", "lin@example.com"])
         stream = BytesIO(); wb.save(stream); return stream.getvalue()
 
+    def _message(self, to: str = "to@example.com") -> dict:
+        return {
+            "row_number": "2", "display_name": "", "to": to, "cc": "", "bcc": "",
+            "subject": "Subject", "body": "Body", "body_html": "", "attachments": [],
+            "errors": [], "warnings": [],
+        }
+
+    def _batch_id(self, messages: list[dict]) -> str:
+        response = self.client.post("/api/batch-id", json={"messages": messages})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["batch_id"]
+
+    def _wait_terminal(self, campaign_id: str) -> dict:
+        campaign = {}
+        for _ in range(100):
+            campaign = self.client.get(f"/api/campaigns/{campaign_id}").json()
+            if campaign["status"] in {"Completed", "CompletedWithErrors", "Cancelled"}:
+                return campaign
+            time.sleep(.02)
+        self.fail(f"Campaign did not reach a terminal state: {campaign}")
+
     def test_health_import_mapping_preview_and_render_validation(self):
         self.assertEqual(self.client.get("/api/health").json()["version"], "0.2.0")
         upload = self.client.post("/api/imports", files={"file": ("contacts.xlsx", self._workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
@@ -69,21 +91,70 @@ class ApiFlowTests(unittest.TestCase):
         messages=[{k:v for k,v in m.items() if k!='source'} for m in rendered["messages"]]
         created=self.client.post("/api/campaigns",json={"name":"Dry test","source_name":"valid.xlsx","mode":"dry_run","batch_id":rendered["batch_id"],"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":""})
         self.assertEqual(created.status_code,200,created.text); cid=created.json()["id"]
-        status=""
-        for _ in range(50):
-            status=self.client.get(f"/api/campaigns/{cid}").json()["status"]
-            if status in {"Completed","CompletedWithErrors"}: break
-            time.sleep(.02)
-        campaign=self.client.get(f"/api/campaigns/{cid}").json()
-        self.assertEqual(status,"Completed"); self.assertEqual(campaign["success"],2)
+        campaign = self._wait_terminal(cid)
+        self.assertEqual(campaign["status"],"Completed"); self.assertEqual(campaign["success"],2)
         self.assertTrue(all(item["remote_id"]=="DryRunOnly" for item in campaign["items"]))
+        for _ in range(50):
+            if cid not in self.main.queue_tasks:
+                break
+            time.sleep(.01)
+        self.assertNotIn(cid, self.main.queue_tasks)
 
     def test_send_requires_exact_batch_confirmation_before_account_lookup(self):
-        messages=[{"row_number":"2","display_name":"","to":"to@example.com","cc":"","bcc":"","subject":"Subject","body":"Body","body_html":"","attachments":[],"errors":[],"warnings":[]}]
-        batch_id=self.client.post('/api/batch-id',json={"messages":messages}).json()["batch_id"]
+        messages=[self._message()]
+        batch_id=self._batch_id(messages)
         response=self.client.post('/api/campaigns',json={"name":"Send","mode":"send","account":"missing@example.com","batch_id":batch_id,"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","reviewed":False,"confirm_text":""})
         self.assertEqual(response.status_code,400); self.assertIn(f"SEND 1 {batch_id[:8].upper()}",response.json()["detail"])
 
+    def test_campaign_api_rejects_blank_recipient_even_if_client_claims_no_errors(self):
+        messages = [self._message("")]
+        batch_id = self._batch_id(messages)
+        response = self.client.post("/api/campaigns", json={
+            "name":"Invalid","mode":"dry_run","batch_id":batch_id,"messages":messages,
+            "skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+        })
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("Recipient is blank", response.json()["detail"])
+
+    def test_schedule_near_or_in_past_is_rejected_instead_of_sending_now(self):
+        messages = [self._message()]
+        batch_id = self._batch_id(messages)
+        scheduled_at = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
+        response = self.client.post("/api/campaigns", json={
+            "name":"Too soon","mode":"dry_run","batch_id":batch_id,"messages":messages,
+            "skip_duplicates":True,"throttle_ms":0,"scheduled_at":scheduled_at,"reviewed":True,"confirm_text":"",
+        })
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("at least 5 seconds", response.json()["detail"])
+
+    def test_terminal_campaign_cannot_resume_and_retry_without_failures_is_rejected(self):
+        messages = [self._message("terminal@example.com")]
+        batch_id = self._batch_id(messages)
+        created = self.client.post("/api/campaigns", json={
+            "name":"Terminal","mode":"dry_run","batch_id":batch_id,"messages":messages,
+            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        cid = created.json()["id"]
+        campaign = self._wait_terminal(cid)
+        self.assertEqual(campaign["status"], "Completed")
+        resume = self.client.post(f"/api/campaigns/{cid}/resume")
+        retry = self.client.post(f"/api/campaigns/{cid}/retry-failed")
+        self.assertEqual(resume.status_code, 400, resume.text)
+        self.assertEqual(retry.status_code, 400, retry.text)
+        self.assertEqual(self.client.get(f"/api/campaigns/{cid}").json()["status"], "Completed")
+
+    def test_history_csv_neutralizes_spreadsheet_formulas(self):
+        self.main.store.log_operation({
+            "campaign_id":"csv","mode":"dry_run","account":"","row_number":"2",
+            "recipient":"=HYPERLINK(\"https://example.invalid\")","subject":"+SUM(1,1)",
+            "fingerprint":"csv-safe","remote_id":"","result":"Failed","error":"@cmd",
+        })
+        response = self.client.get("/api/history.csv")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("'=HYPERLINK", response.text)
+        self.assertIn("'+SUM", response.text)
+        self.assertIn("'@cmd", response.text)
 
     def test_cross_origin_mutation_is_blocked(self):
         response = self.client.post('/api/backup', headers={'Origin':'https://evil.example'})
