@@ -60,12 +60,14 @@ imports: dict[str, dict[str, Any]] = {}
 oauth_sessions: dict[str, dict[str, Any]] = {}
 queue_tasks: dict[str, asyncio.Task] = {}
 scheduler_task: asyncio.Task | None = None
+campaign_run_lock: asyncio.Lock | None = None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global scheduler_task
+    global scheduler_task, campaign_run_lock
     _cleanup_orphan_import_files()
+    campaign_run_lock = asyncio.Lock()
     if scheduler_task is None or scheduler_task.done():
         scheduler_task = asyncio.create_task(_scheduler_loop())
     try:
@@ -84,6 +86,7 @@ async def lifespan(_app: FastAPI):
             except asyncio.CancelledError:
                 pass
             scheduler_task = None
+        campaign_run_lock = None
 
 
 app = FastAPI(title="MailDesk", version=APP_VERSION, docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -303,7 +306,7 @@ async def attachments_upload(file: UploadFile = File(...)) -> dict[str, Any]:
         "id": attachment_id,
         "name": filename,
         "stored_name": stored_name,
-        "mime_type": file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream",
+        "mime_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
         "size": size,
     })
 
@@ -321,6 +324,8 @@ async def attachment_content(attachment_id: str) -> FileResponse:
 
 @app.delete("/api/attachments/{attachment_id}")
 async def attachments_delete(attachment_id: str) -> dict[str, bool]:
+    if store.attachment_in_use(attachment_id):
+        raise HTTPException(409, "This attachment is used by a saved template or active campaign. Remove that reference first.")
     item = store.delete_attachment(attachment_id)
     if item:
         (attachments_dir() / item["stored_name"]).unlink(missing_ok=True)
@@ -510,7 +515,6 @@ async def browser_sender_save(sender_id: str, payload: BrowserSenderPayload) -> 
     existing = store.get_browser_sender(sender_id)
     item = payload.model_dump()
     item["id"] = sender_id
-    # Changing browser/profile/slot/email invalidates human verification.
     if existing and any(str(existing.get(key)) != str(item.get(key)) for key in ("browser_id", "profile_dir", "gmail_slot", "expected_email")):
         item["verified_at"] = ""
     return store.save_browser_sender(item)
@@ -518,6 +522,8 @@ async def browser_sender_save(sender_id: str, payload: BrowserSenderPayload) -> 
 
 @app.delete("/api/browser-senders/{sender_id}")
 async def browser_sender_delete(sender_id: str) -> dict[str, bool]:
+    if store.browser_sender_in_use(sender_id):
+        raise HTTPException(409, "This browser sender route is used by an active campaign. Cancel or finish that campaign first.")
     store.delete_browser_sender(sender_id)
     return {"deleted": True}
 
@@ -546,11 +552,14 @@ async def browser_sender_verify_confirm(sender_id: str) -> dict[str, Any]:
 async def accounts_list() -> list[dict[str, Any]]:
     output = []
     for item in store.list_accounts():
-        account = store.get_account(item["email"])
-        scopes = ""
-        if account:
-            scopes = str(account[0].get("scope") or "")
-        output.append({**item, "gmail": GMAIL_SCOPE in scopes, "sheets": SHEETS_SCOPE in scopes})
+        try:
+            account = store.get_account(item["email"])
+            scopes = str(account[0].get("scope") or "") if account else ""
+            output.append({**item, "gmail": GMAIL_SCOPE in scopes, "sheets": SHEETS_SCOPE in scopes, "credential_error": ""})
+        except Exception:
+            # One corrupt/decrypt-failed account must not make the whole Accounts
+            # page unusable; keep it visible so the user can disconnect/reconnect.
+            output.append({**item, "gmail": False, "sheets": False, "credential_error": "Stored credentials could not be read. Disconnect and reconnect this account."})
     return output
 
 
@@ -592,6 +601,8 @@ async def google_callback(code: str = "", state: str = "", error: str = "") -> H
 
 @app.delete("/api/accounts/{email}")
 async def accounts_delete(email: str) -> dict[str, bool]:
+    if store.account_in_use(email):
+        raise HTTPException(409, "This Google account is used by an active campaign. Cancel or finish that campaign first.")
     store.delete_account(email)
     return {"deleted": True}
 
@@ -682,6 +693,8 @@ async def campaign_resume(campaign_id: str) -> dict[str, Any]:
     campaign = _require_campaign(campaign_id)
     if campaign["status"] in {"Completed", "CompletedWithErrors", "Cancelled"}:
         raise HTTPException(400, f"Cannot resume a {campaign['status'].lower()} campaign.")
+    if store.queue_items(campaign_id, statuses=("NeedsReview",)):
+        raise HTTPException(409, "Resolve the uncertain Gmail outcome before resuming this campaign.")
     if not store.queue_items(campaign_id):
         raise HTTPException(400, "This campaign has no pending items to resume.")
     if campaign["mode"] == "browser":
@@ -706,6 +719,8 @@ async def campaign_retry(campaign_id: str) -> dict[str, Any]:
     campaign = _require_campaign(campaign_id)
     if campaign["status"] == "Cancelled":
         raise HTTPException(400, "Cannot retry a cancelled campaign.")
+    if store.queue_items(campaign_id, statuses=("NeedsReview",)):
+        raise HTTPException(409, "Resolve the uncertain Gmail outcome before retrying failed items.")
     if campaign["mode"] == "browser":
         _require_fresh_browser_sender(campaign["browser_sender_id"])
     retried = store.retry_failed(campaign_id)
@@ -713,6 +728,47 @@ async def campaign_retry(campaign_id: str) -> dict[str, Any]:
         raise HTTPException(400, "This campaign has no failed items to retry.")
     store.set_campaign_status(campaign_id, "Queued")
     _start_campaign_task(campaign_id)
+    return store.get_campaign(campaign_id, include_items=True) or {}
+
+
+@app.post("/api/campaigns/{campaign_id}/items/{item_id}/resolve-sent")
+async def campaign_resolve_uncertain_sent(campaign_id: str, item_id: int) -> dict[str, Any]:
+    campaign = _require_campaign(campaign_id)
+    item = store.get_queue_item(campaign_id, item_id)
+    if not item:
+        raise HTTPException(404, "Campaign item not found.")
+    if item["status"] != "NeedsReview":
+        raise HTTPException(400, "Only an item awaiting outcome review can be resolved.")
+    if campaign["mode"] not in {"send", "draft"}:
+        raise HTTPException(400, "Outcome review is only used for Gmail API sends/drafts.")
+    remote_id = "ConfirmedByUser"
+    store.update_item(item_id, status="Success", remote_id=remote_id, error="")
+    store.log_operation({
+        **_operation_from_item(campaign, item, campaign.get("account", "")),
+        "remote_id": remote_id,
+        "result": "Success",
+        "error": "User confirmed the Gmail operation completed after an uncertain API response.",
+    })
+    store.refresh_campaign_counts(campaign_id)
+    store.set_campaign_status(campaign_id, "Paused", error="Uncertain outcome resolved as completed. Review remaining work before resuming.")
+    return store.get_campaign(campaign_id, include_items=True) or {}
+
+
+@app.post("/api/campaigns/{campaign_id}/items/{item_id}/resolve-not-sent")
+async def campaign_resolve_uncertain_not_sent(campaign_id: str, item_id: int) -> dict[str, Any]:
+    campaign = _require_campaign(campaign_id)
+    item = store.get_queue_item(campaign_id, item_id)
+    if not item:
+        raise HTTPException(404, "Campaign item not found.")
+    if item["status"] != "NeedsReview":
+        raise HTTPException(400, "Only an item awaiting outcome review can be resolved.")
+    if campaign["mode"] not in {"send", "draft"}:
+        raise HTTPException(400, "Outcome review is only used for Gmail API sends/drafts.")
+    error = "User confirmed the Gmail operation did not complete after an uncertain API response."
+    store.update_item(item_id, status="Failed", remote_id="", error=error)
+    store.log_operation({**_operation_from_item(campaign, item, campaign.get("account", "")), "result": "Failed", "error": error})
+    store.refresh_campaign_counts(campaign_id)
+    store.set_campaign_status(campaign_id, "Paused", error="Uncertain outcome resolved as not completed. Retry the failed item only if appropriate.")
     return store.get_campaign(campaign_id, include_items=True) or {}
 
 
@@ -927,6 +983,17 @@ def _start_campaign_task(campaign_id: str) -> None:
 
 
 async def _run_campaign(campaign_id: str) -> None:
+    global campaign_run_lock
+    if campaign_run_lock is None:
+        campaign_run_lock = asyncio.Lock()
+    # Serialize side-effecting campaigns. This makes duplicate fingerprint checks
+    # meaningful across simultaneously queued campaigns and prevents multiple local
+    # campaigns from defeating each other's configured Gmail/browser pacing.
+    async with campaign_run_lock:
+        await _run_campaign_locked(campaign_id)
+
+
+async def _run_campaign_locked(campaign_id: str) -> None:
     campaign = store.get_campaign(campaign_id)
     if not campaign or campaign["status"] in {"Cancelled", "Completed", "CompletedWithErrors"}:
         return
@@ -955,9 +1022,6 @@ async def _run_campaign(campaign_id: str) -> None:
                 store.refresh_campaign_counts(campaign_id)
                 continue
 
-            # Long-running queues may outlive an OAuth access token. Refresh only
-            # when the token approaches expiry instead of making a profile request
-            # for every row.
             if mode in {"draft", "send"} and not token_is_valid(gmail_token or {}, margin_seconds=120):
                 gmail_token, actual = await _verified_google_account(current["account"], require_scope=GMAIL_SCOPE)
                 account_label = actual
@@ -972,8 +1036,6 @@ async def _run_campaign(campaign_id: str) -> None:
                         url = compose_url(item["recipient"], item["subject"], item["body"], item["cc"], item["bcc"], int(sender["gmail_slot"]))
                         launch_compose(browser_profile or _profile_for_sender(sender), url)
                     except Exception as exc:
-                        # Browser route/verification failures are campaign-level
-                        # setup failures. Do not burn every remaining row as Failed.
                         store.set_campaign_status(campaign_id, "Paused", error=_safe_error(exc))
                         return
                     remote_id = f"BrowserCompose:u/{sender['gmail_slot']}"
@@ -990,26 +1052,31 @@ async def _run_campaign(campaign_id: str) -> None:
                 status = exc.response.status_code
                 error = _safe_error(exc)
                 if status in {401, 403, 429} or status >= 500:
-                    # Auth/rate/server errors affect the whole queue. For real sends,
-                    # 5xx responses can also be ambiguous, so do not auto-advance.
-                    item_status = "NeedsReview" if mode == "send" and status >= 500 else "Failed"
-                    result = "Uncertain" if item_status == "NeedsReview" else "Failed"
+                    ambiguous = mode in {"send", "draft"} and status >= 500
+                    item_status = "NeedsReview" if ambiguous else "Failed"
+                    result = "Uncertain" if ambiguous else "Failed"
                     store.update_item(item["id"], status=item_status, error=error, increment_attempt=True)
                     store.log_operation({**_operation_from_item(current, item, account_label), "result": result, "error": error})
                     store.refresh_campaign_counts(campaign_id)
-                    store.set_campaign_status(campaign_id, "Paused", error=error)
+                    pause_error = (
+                        f"Gmail {mode} outcome is uncertain; inspect Gmail before resolving this item. {error}"
+                        if ambiguous else error
+                    )
+                    store.set_campaign_status(campaign_id, "Paused", error=pause_error)
                     return
                 store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 error = _safe_error(exc)
-                if mode == "send":
-                    # A lost response does not prove the send failed. Preserve the
-                    # item for explicit review instead of enabling a duplicate retry.
+                if mode in {"send", "draft"}:
                     store.update_item(item["id"], status="NeedsReview", error=error, increment_attempt=True)
                     store.log_operation({**_operation_from_item(current, item, account_label), "result": "Uncertain", "error": error})
                     store.refresh_campaign_counts(campaign_id)
-                    store.set_campaign_status(campaign_id, "Paused", error="Send outcome is uncertain; inspect Gmail before taking further action. " + error)
+                    store.set_campaign_status(
+                        campaign_id,
+                        "Paused",
+                        error=f"Gmail {mode} outcome is uncertain; inspect Gmail before resolving this item. {error}",
+                    )
                     return
                 store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
@@ -1023,6 +1090,9 @@ async def _run_campaign(campaign_id: str) -> None:
 
         final = store.get_campaign(campaign_id)
         if final and final["status"] == "Running":
+            if store.queue_items(campaign_id, statuses=("NeedsReview",)):
+                store.set_campaign_status(campaign_id, "Paused", error="Resolve the uncertain Gmail outcome before continuing.")
+                return
             store.refresh_campaign_counts(campaign_id)
             final = store.get_campaign(campaign_id)
             store.set_campaign_status(campaign_id, "CompletedWithErrors" if final and final["failed"] else "Completed")
@@ -1045,7 +1115,10 @@ def _operation_from_item(campaign: dict[str, Any], item: dict[str, Any], account
 
 # ---------- common helpers ----------
 async def _verified_google_account(email_address: str, require_scope: str = GMAIL_SCOPE) -> tuple[dict[str, Any], str]:
-    account = store.get_account(email_address)
+    try:
+        account = store.get_account(email_address)
+    except Exception as exc:
+        raise RuntimeError("Stored Google credentials could not be read. Disconnect and reconnect this account.") from exc
     if not account:
         raise RuntimeError("The selected Google account is not connected.")
     token, client = account
@@ -1125,8 +1198,6 @@ def _normalize_schedule(value: str) -> str:
 
 
 def _cleanup_orphan_import_files() -> None:
-    # Import metadata is intentionally process-local. Any file left from an older
-    # process is unreachable and can be removed safely at startup.
     for path in imports_dir().iterdir():
         if path.is_file():
             try:
@@ -1200,7 +1271,6 @@ def _csv_safe(value: Any) -> str:
 
 def _safe_error(exc: Exception) -> str:
     text = str(exc)
-    # Avoid accidental bearer/token disclosure if an upstream library includes headers.
     text = re.sub(r"(?i)bearer\s+[a-z0-9._~-]+", "Bearer [REDACTED]", text)
     text = re.sub(r"(?i)(access_token|refresh_token|client_secret)[=:]\s*[^\s,}]+", r"\1=[REDACTED]", text)
     return text[:2000]
