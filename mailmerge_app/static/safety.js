@@ -1,6 +1,7 @@
 (() => {
   const HTML_EDIT_WARNING = 'HTML version removed because the plain-text message was edited during final review.';
   const NO_ROWS_SENTINEL = '__maildesk_no_rows_selected__';
+  const QUEUE_DETAIL_ROW_LIMIT = 500;
 
   // The backend intentionally treats selected_rows=[] as "all rows" so callers
   // can omit a large all-row list. The UI, however, also reaches size=0 when the
@@ -52,8 +53,9 @@
   };
 
   // Replace the queue detail renderer so uncertain Gmail outcomes have an explicit
-  // audited resolution path. Resume/retry stays blocked server-side until one of
-  // these choices is made after checking Gmail.
+  // audited resolution path. Large campaigns are deliberately not expanded into
+  // thousands of DOM rows at once: that can freeze the desktop WebView. Always
+  // include NeedsReview rows even when they fall outside the normal detail window.
   toggleCampaignDetails = async function toggleCampaignDetailsWithResolution(card, id) {
     const existing = q('.queue-items', card);
     if (existing) {
@@ -62,14 +64,27 @@
     }
     try {
       const campaign = await api(`/api/campaigns/${id}`);
+      const allItems = Array.isArray(campaign.items) ? campaign.items : [];
+      const normalItems = allItems.slice(0, QUEUE_DETAIL_ROW_LIMIT);
+      const includedIds = new Set(normalItems.map(item => item.id));
+      const reviewItems = allItems.filter(item => item.status === 'NeedsReview' && !includedIds.has(item.id));
+      const visibleItems = [...normalItems, ...reviewItems];
+
       const wrap = document.createElement('div');
       wrap.className = 'table-scroll queue-items';
+      if (allItems.length > visibleItems.length) {
+        const notice = document.createElement('div');
+        notice.className = 'callout';
+        notice.textContent = `Showing ${visibleItems.length.toLocaleString()} of ${allItems.length.toLocaleString()} items to keep this view responsive. Safety-review items are always included.`;
+        wrap.append(notice);
+      }
+
       const table = document.createElement('table');
       table.className = 'data-table';
       table.innerHTML = '<thead><tr><th>#</th><th>Row</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Attempts</th><th>Error</th><th>Review action</th></tr></thead>';
       const body = document.createElement('tbody');
 
-      campaign.items.forEach(item => {
+      visibleItems.forEach(item => {
         const tr = document.createElement('tr');
         [item.ordinal, item.row_number, item.recipient, item.subject, item.status, item.attempts, item.error || ''].forEach(value => {
           const td = document.createElement('td');
