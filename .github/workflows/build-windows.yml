@@ -58,7 +58,8 @@ jobs:
 
       - name: Validate frontend JavaScript
         shell: pwsh
-        run: node --check mailmerge_app/static/app.js
+        run: |
+          node --check mailmerge_app/static/app.js
 
       - name: Install pinned Inno Setup
         shell: pwsh
