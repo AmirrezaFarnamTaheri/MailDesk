@@ -8,6 +8,33 @@ from pathlib import Path
 import threading
 import time
 import webbrowser
+from typing import TextIO
+
+
+_GUI_FALLBACK_STREAMS: list[TextIO] = []
+
+
+def _ensure_standard_streams() -> None:
+    """Provide writable streams for Windows GUI/frozen processes.
+
+    PyInstaller ``--windowed`` executables normally start with ``sys.stdout`` and
+    ``sys.stderr`` set to ``None``. Several libraries reasonably assume those
+    streams exist; Uvicorn's default formatter, for example, probes
+    ``sys.stderr.isatty()`` while configuring logging. Give such libraries a real
+    text stream without opening a console window. The handles intentionally live
+    for the process lifetime.
+    """
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is not None:
+            continue
+        stream = open(os.devnull, "w", encoding="utf-8", errors="replace", buffering=1)
+        _GUI_FALLBACK_STREAMS.append(stream)
+        setattr(sys, name, stream)
+
+
+# Repair GUI-process streams before importing third-party modules. This also makes
+# any import-time diagnostics from those modules safe in PyInstaller windowed mode.
+_ensure_standard_streams()
 
 import httpx
 import uvicorn
@@ -46,6 +73,20 @@ def _wait_ready(url: str, timeout: float = 12) -> None:
             pass
         time.sleep(0.15)
     raise RuntimeError("MailDesk local server did not start.")
+
+
+def _server_config() -> uvicorn.Config:
+    # A desktop GUI does not have a terminal and should never ask Uvicorn to infer
+    # ANSI/color capabilities from stdio. ``use_colors=False`` also protects this
+    # boundary if another launcher replaces the streams after module import.
+    _ensure_standard_streams()
+    return uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=APP_PORT,
+        log_level="warning",
+        use_colors=False,
+    )
 
 
 def _frozen_gui_integrity_error() -> str:
@@ -105,13 +146,15 @@ def main() -> None:
 
         # Do not import webview in a headless smoke process: on Windows that can
         # initialize pythonnet/.NET and block before CI can observe the marker.
-        # Verify the frozen import table and WebView2/JS assets instead. The normal
-        # interactive path below still imports and starts pywebview for real users.
+        # Verify the frozen import table/native assets AND configure the same
+        # Uvicorn server object used by real startup. The latter catches windowed
+        # executables whose stdout/stderr are None before users receive the binary.
         try:
             integrity_error = _frozen_gui_integrity_error()
+            _server_config()
         except BaseException as exc:
             marker.write_text(
-                f"ERROR: frozen GUI integrity probe failed: {type(exc).__name__}: {exc}",
+                f"ERROR: frozen GUI bootstrap probe failed: {type(exc).__name__}: {exc}",
                 encoding="utf-8",
             )
             os._exit(2)
@@ -135,8 +178,7 @@ def main() -> None:
         if _port_in_use(APP_PORT):
             raise RuntimeError(f"Port {APP_PORT} is already in use by another local application.")
 
-        config = uvicorn.Config(app, host="127.0.0.1", port=APP_PORT, log_level="warning")
-        server = uvicorn.Server(config)
+        server = uvicorn.Server(_server_config())
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         _wait_ready(APP_URL)
