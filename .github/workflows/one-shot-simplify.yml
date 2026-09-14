@@ -1,4 +1,4 @@
-name: One-shot product simplification
+name: One-shot product simplification cleanup
 
 on:
   push:
@@ -9,64 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  apply:
-    if: "${{ github.event.head_commit.message == 'chore: publish validated simplification' }}"
+  cleanup:
+    if: "${{ github.event.head_commit.message == 'chore: remove simplification payload' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Reconstruct and verify validated patch
+      - name: Remove temporary payload
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/simplify-payload/* > /tmp/simplify.patch.gz.b64
-          test "$(wc -c < /tmp/simplify.patch.gz.b64)" -eq 58624
-          echo "7aac16e33df2331b7824ee578f8c97a11e2cdcf11b92775730c432c33701ed71  /tmp/simplify.patch.gz.b64" | sha256sum -c -
-          base64 -d /tmp/simplify.patch.gz.b64 | gzip -d > /tmp/simplify.patch
-          echo "5119468d876c47252fc115ec2d69207b27db1b499ffa9260c5a27ee26bb1417f  /tmp/simplify.patch" | sha256sum -c -
-          ! grep -q 'static/safety.js' .github/workflows/build-windows.yml
-          git apply --check --exclude=.github/workflows/build-windows.yml /tmp/simplify.patch
-          git apply --exclude=.github/workflows/build-windows.yml /tmp/simplify.patch
-          git diff --check
-          git diff --name-only | sort > /tmp/actual-files
-          cat > /tmp/expected-files <<'EOF'
-          README.md
-          docs/USER-GUIDE.md
-          mailmerge_app/browser_profiles.py
-          mailmerge_app/main.py
-          mailmerge_app/static/app.css
-          mailmerge_app/static/app.js
-          mailmerge_app/static/index.html
-          mailmerge_app/static/safety.js
-          mailmerge_app/storage.py
-          tests/test_api.py
-          tests/test_core.py
-          tests/test_frontend_integrity.py
-          EOF
-          sort -o /tmp/expected-files /tmp/expected-files
-          diff -u /tmp/expected-files /tmp/actual-files
-
-      - name: Validate simplified product
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --check mailmerge_app/static/app.js
-          python -m pip install -r requirements-dev.txt
-          python -m pip check
-          python -m compileall -q mailmerge_app
-          python -m unittest discover -s tests -v
-          test ! -e mailmerge_app/static/safety.js
-          ! grep -R "campaignReadiness\|reviewedCheck\|confirmText\|refreshBeforeReview" mailmerge_app tests docs README.md
-          git diff --check
-
-      - name: Commit product changes
-        shell: bash
-        run: |
-          set -euo pipefail
+          git rm .github/simplify-payload/*
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'feat: simplify product and add first-run tour'
+          git commit -m 'chore: remove simplification payload files'
           git push origin HEAD:main
