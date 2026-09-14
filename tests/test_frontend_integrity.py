@@ -101,6 +101,16 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('Create ${count} Gmail draft', APP_JS)
         self.assertIn('`Send ${count} ${plural}`', APP_JS)
 
+    def test_guided_placeholder_builder_covers_source_fallback_and_insertion(self):
+        for token in ('placeholderNameInput', 'placeholderSourceSelect', 'placeholderFallbackInput', 'placeholderTokenPreview', 'placeholderSamplePreview', 'placeholderInsertTarget', 'insertPlaceholderButton', 'insertConditionalButton', 'placeholderMappingSummary'):
+            self.assertIn(f'id="{token}"', INDEX_HTML)
+        self.assertIn('function insertPlaceholderFromBuilder()', APP_JS)
+        self.assertIn('function insertConditionalFromBuilder()', APP_JS)
+        self.assertIn('function setPlaceholderFallback(key,fallback)', APP_JS)
+        self.assertIn('placeholderMappingLocked', APP_JS)
+        self.assertIn("No column · use fallback only", APP_JS)
+        self.assertIn("selector:'.personalization-workbench'", APP_JS)
+
     def test_placeholder_mapping_ui_is_wired_to_render_payload(self):
         self.assertIn('id="placeholderMappingList"', INDEX_HTML)
         self.assertIn('id="autoMapPlaceholdersButton"', INDEX_HTML)

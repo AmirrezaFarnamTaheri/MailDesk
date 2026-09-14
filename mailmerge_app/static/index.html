@@ -110,14 +110,35 @@
                     <div id="bodyHtmlEditor" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Optional HTML version of the message"></div>
                     <label class="field compact-top"><span>HTML signature <em>optional</em></span><div id="signatureHtmlEditor" class="rich-editor compact" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Signature, links, logo text…"></div></label>
                   </div>
-                  <div class="placeholder-mapper">
-                    <div class="placeholder-mapper-head">
-                      <div><strong>Placeholder mapping</strong><span>Choose which sheet column supplies each reusable placeholder.</span></div>
-                      <button type="button" class="button secondary small" id="autoMapPlaceholdersButton">Auto-match</button>
+                  <div class="personalization-workbench">
+                    <div class="personalization-builder">
+                      <div class="personalization-builder-head">
+                        <div><span class="section-kicker">Personalization builder</span><strong>Create a reusable placeholder</strong><span>Name it once, choose where its value comes from, and insert it at the current cursor.</span></div>
+                        <span class="insert-target" id="placeholderInsertTarget">Insert into · Message</span>
+                      </div>
+                      <div class="placeholder-builder-grid">
+                        <label class="field placeholder-builder-field"><span><b class="builder-step">1</b> Placeholder name</span><input id="placeholderNameInput" type="text" maxlength="80" autocomplete="off" placeholder="FirstName"></label>
+                        <label class="field placeholder-builder-field"><span><b class="builder-step">2</b> Fill from</span><select id="placeholderSourceSelect"><option value="">Choose a source…</option></select></label>
+                        <label class="field placeholder-builder-field"><span><b class="builder-step">3</b> Fallback if blank <em>optional</em></span><input id="placeholderFallbackInput" type="text" maxlength="240" autocomplete="off" placeholder="there"></label>
+                      </div>
+                      <div class="placeholder-builder-preview">
+                        <div class="builder-preview-cell"><span>Token</span><code id="placeholderTokenPreview">{{Placeholder}}</code></div>
+                        <div class="builder-preview-cell sample"><span>Sample value</span><strong id="placeholderSamplePreview">Choose a source</strong></div>
+                        <div class="placeholder-builder-actions"><button type="button" class="button primary" id="insertPlaceholderButton" disabled>Insert placeholder</button><button type="button" class="button secondary" id="insertConditionalButton" disabled>Insert condition</button></div>
+                      </div>
+                      <div class="placeholder-quick-source">
+                        <div><span>Quick source</span><small>Pick a column to prefill the builder. You can rename the placeholder before inserting it.</small></div>
+                        <div class="placeholder-list" id="placeholderList"><span class="empty-inline">Load a source to see columns.</span></div>
+                      </div>
                     </div>
-                    <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline">Add a placeholder to the message to map it.</div></div>
+                    <div class="placeholder-mapper">
+                      <div class="placeholder-mapper-head">
+                        <div><strong>Used placeholders</strong><span id="placeholderMappingSummary">No placeholders in this template yet.</span></div>
+                        <button type="button" class="button secondary small" id="autoMapPlaceholdersButton">Auto-match columns</button>
+                      </div>
+                      <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline placeholder-empty-state">Create or type a placeholder to map it.</div></div>
+                    </div>
                   </div>
-                  <div class="placeholder-section"><div class="field-label-row"><span>Insert placeholder</span><span class="hint">Defaults: <code>{{Name|there}}</code> · Conditional: <code>{{#if Link}}…{{/if}}</code></span></div><div class="placeholder-list" id="placeholderList"><span class="empty-inline">Load a source to see columns.</span></div></div>
                   <div class="split-section">
                     <div><div class="field-label-row"><span>Reusable snippets</span><button class="button ghost small" id="newSnippetButton">New snippet</button></div><div class="snippet-list" id="snippetList"></div></div>
                     <div><div class="field-label-row"><span>Attachments</span><label class="button ghost small" for="attachmentFile">Add file<input id="attachmentFile" type="file" hidden multiple></label></div><div class="attachment-list" id="attachmentList"></div><p class="hint">Up to 20 MB each. Executables/scripts are blocked. Browser compose mode cannot auto-attach files.</p></div>
