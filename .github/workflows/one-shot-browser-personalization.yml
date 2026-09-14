@@ -1,0 +1,68 @@
+name: One-shot browser and personalization fix
+
+on:
+  push:
+    branches:
+      - automation/browser-personalization-fix
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: "${{ github.event.head_commit.message == 'chore: run browser personalization' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Apply reviewed transforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/browser_personalization_backend.py
+          python .github/browser_personalization_frontend.py
+          git diff --check
+          git diff --name-only | sort > /tmp/actual-files
+          cat > /tmp/expected-files <<'EOF'
+          docs/USER-GUIDE.md
+          mailmerge_app/browser_profiles.py
+          mailmerge_app/main.py
+          mailmerge_app/static/app.css
+          mailmerge_app/static/app.js
+          mailmerge_app/static/index.html
+          tests/test_browser_discovery.py
+          tests/test_frontend_integrity.py
+          tests/test_placeholder_mapping.py
+          EOF
+          sort -o /tmp/expected-files /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+      - name: Validate product
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check mailmerge_app/static/app.js
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+          python -m compileall -q mailmerge_app
+          python -m unittest discover -s tests -v
+
+      - name: Commit validated product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/USER-GUIDE.md mailmerge_app/browser_profiles.py mailmerge_app/main.py mailmerge_app/static/app.css mailmerge_app/static/app.js mailmerge_app/static/index.html tests/test_browser_discovery.py tests/test_frontend_integrity.py tests/test_placeholder_mapping.py
+          git commit -m 'fix: restore browser accounts and add mapping workbench'
+          git push origin HEAD:automation/browser-personalization-fix
