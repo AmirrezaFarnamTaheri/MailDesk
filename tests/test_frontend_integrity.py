@@ -12,6 +12,11 @@ INDEX_HTML = (STATIC / "index.html").read_text(encoding="utf-8")
 
 
 class FrontendIntegrityTests(unittest.TestCase):
+    # Aliases keep focused frontend assertions concise while sharing the same
+    # immutable source snapshots used by the rest of this integrity suite.
+    html = INDEX_HTML
+    js = APP_JS
+
     def test_every_els_reference_is_registered_and_present_in_html(self):
         match = re.search(r"const ids\s*=\s*\[(.*?)\];", APP_JS, flags=re.S)
         self.assertIsNotNone(match, "Could not find the frontend element registry")
