@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -23,6 +24,31 @@ def _first_existing(paths: list[Path | None]) -> Path | None:
     return None
 
 
+def _windows_app_path(executable_name: str) -> Path | None:
+    if platform.system() != "Windows":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    key_paths = [
+        rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{executable_name}",
+        rf"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\{executable_name}",
+    ]
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for key_path in key_paths:
+            try:
+                with winreg.OpenKey(root, key_path) as key:
+                    raw = winreg.QueryValueEx(key, None)[0]
+            except OSError:
+                continue
+            if isinstance(raw, str):
+                candidate = Path(os.path.expandvars(raw.strip().strip('"')))
+                if candidate.is_file():
+                    return candidate
+    return None
+
+
 def _browser_candidates():
     home = Path.home()
     system = platform.system()
@@ -30,9 +56,9 @@ def _browser_candidates():
         local = Path(os.getenv("LOCALAPPDATA", home / "AppData" / "Local"))
         program_files = [Path(os.getenv("PROGRAMFILES", "C:/Program Files")), Path(os.getenv("PROGRAMFILES(X86)", "C:/Program Files (x86)"))]
         return [
-            ("chrome", "Google Chrome", [local / "Google/Chrome/Application/chrome.exe", *(p / "Google/Chrome/Application/chrome.exe" for p in program_files)], [local / "Google/Chrome/User Data"]),
-            ("edge", "Microsoft Edge", [*(p / "Microsoft/Edge/Application/msedge.exe" for p in program_files), local / "Microsoft/Edge/Application/msedge.exe"], [local / "Microsoft/Edge/User Data"]),
-            ("brave", "Brave", [*(p / "BraveSoftware/Brave-Browser/Application/brave.exe" for p in program_files), local / "BraveSoftware/Brave-Browser/User Data"]),
+            ("chrome", "Google Chrome", [_windows_app_path("chrome.exe"), local / "Google/Chrome/Application/chrome.exe", *(p / "Google/Chrome/Application/chrome.exe" for p in program_files)], [local / "Google/Chrome/User Data"]),
+            ("edge", "Microsoft Edge", [_windows_app_path("msedge.exe"), *(p / "Microsoft/Edge/Application/msedge.exe" for p in program_files), local / "Microsoft/Edge/Application/msedge.exe"], [local / "Microsoft/Edge/User Data"]),
+            ("brave", "Brave", [_windows_app_path("brave.exe"), *(p / "BraveSoftware/Brave-Browser/Application/brave.exe" for p in program_files), local / "BraveSoftware/Brave-Browser/Application/brave.exe"], [local / "BraveSoftware/Brave-Browser/User Data"]),
         ]
     if system == "Darwin":
         support = home / "Library/Application Support"
@@ -93,7 +119,7 @@ def discover_profiles(*, force_refresh: bool = False) -> list[dict[str, object]]
             raw_info = info_cache.get(profile_dir, {})
             info = raw_info if isinstance(raw_info, dict) else {}
             preferences = _read_json(user_data / profile_dir / "Preferences")
-            emails = _extract_emails(info, preferences)
+            primary_email, gmail_accounts, emails = _extract_profile_accounts(info, preferences)
             output.append(
                 {
                     "browser_id": browser_id,
@@ -102,6 +128,8 @@ def discover_profiles(*, force_refresh: bool = False) -> list[dict[str, object]]
                     "user_data": str(user_data),
                     "profile_dir": profile_dir,
                     "profile_name": info.get("name") or ("Default" if profile_dir == "Default" else profile_dir),
+                    "primary_email": primary_email,
+                    "gmail_accounts": gmail_accounts,
                     "emails": emails,
                     "profile_id": f"{browser_id}|{profile_dir}",
                 }
@@ -166,31 +194,175 @@ def launch_compose(profile: dict[str, object], url: str) -> None:
 
 def _read_json(path: Path) -> dict:
     try:
-        # Profile metadata files should be small. Bound reads so a corrupt or
-        # replaced browser file cannot consume arbitrary memory during discovery.
-        if path.stat().st_size > 16 * 1024 * 1024:
-            return {}
         decoded = json.loads(path.read_text(encoding="utf-8"))
         return decoded if isinstance(decoded, dict) else {}
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
 
-def _extract_emails(info: dict, preferences: dict) -> list[str]:
-    # These are useful hints for configuration only. Chromium does not expose a stable
-    # mapping from account email -> Gmail /u/N/ slot, so the app requires human verification.
-    candidates: list[str] = []
-    for value in (info.get("user_name"), info.get("gaia_name")):
-        if isinstance(value, str) and "@" in value:
-            candidates.append(value)
+def _pref(root: dict, dotted_key: str):
+    if dotted_key in root:
+        return root[dotted_key]
+    current: object = root
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _email(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return value if "@" in value and not any(ch.isspace() for ch in value) else ""
+
+
+def _extract_profile_accounts(info: dict, preferences: dict) -> tuple[str, list[dict[str, object]], list[str]]:
+    primary_candidates = [
+        info.get("user_name"),
+        _pref(preferences, "google.services.username"),
+        _pref(preferences, "google.services.last_signed_in_username"),
+        _pref(preferences, "google.services.last_username"),
+    ]
+    primary_email = next((email for value in primary_candidates if (email := _email(value))), "")
+    gmail_accounts = _gmail_accounts_from_preferences(preferences)
+    emails: list[str] = []
+    seen: set[str] = set()
+    def add(value: object) -> None:
+        email = _email(value)
+        key = email.casefold()
+        if email and key not in seen:
+            seen.add(key)
+            emails.append(email)
+    for account in gmail_accounts:
+        add(account.get("email"))
+    add(primary_email)
     account_info = preferences.get("account_info", []) if isinstance(preferences, dict) else []
     if isinstance(account_info, list):
         for account in account_info:
             if isinstance(account, dict):
-                email = account.get("email")
-                if isinstance(email, str) and "@" in email:
-                    candidates.append(email)
-    return sorted(set(candidates), key=str.lower)
+                add(account.get("email"))
+    return primary_email, gmail_accounts, emails
+
+
+def _gmail_accounts_from_preferences(preferences: dict) -> list[dict[str, object]]:
+    gaia_cookie = preferences.get("gaia_cookie", {}) if isinstance(preferences, dict) else {}
+    if not isinstance(gaia_cookie, dict):
+        gaia_cookie = {}
+    binary = gaia_cookie.get("last_list_accounts_binary_data") or _pref(preferences, "gaia_cookie.last_list_accounts_binary_data")
+    accounts = _parse_binary_list_accounts(binary) if isinstance(binary, str) and binary else []
+    source = "browser_session"
+    if not accounts:
+        legacy = gaia_cookie.get("last_list_accounts_data") or _pref(preferences, "gaia_cookie.last_list_accounts_data")
+        accounts = _parse_legacy_list_accounts(legacy) if isinstance(legacy, str) and legacy else []
+        source = "browser_session_legacy"
+    visible: list[dict[str, object]] = []
+    for account in accounts:
+        if account.get("signed_out"):
+            continue
+        email = _email(account.get("email"))
+        if not email:
+            continue
+        visible.append({"slot": len(visible), "email": email, "valid": bool(account.get("valid", True)), "verified": bool(account.get("verified", True)), "source": source})
+    return visible
+
+
+def _parse_binary_list_accounts(value: str) -> list[dict[str, object]]:
+    try:
+        padded = value + "=" * ((4 - len(value) % 4) % 4)
+        data = base64.b64decode(padded, validate=False)
+        accounts: list[dict[str, object]] = []
+        pos = 0
+        while pos < len(data):
+            tag, pos = _read_varint(data, pos)
+            field, wire = tag >> 3, tag & 7
+            if field == 1 and wire == 2:
+                length, pos = _read_varint(data, pos)
+                end = pos + length
+                if end > len(data):
+                    return []
+                parsed = _parse_binary_account(data[pos:end])
+                if parsed:
+                    accounts.append(parsed)
+                pos = end
+            else:
+                pos = _skip_wire_value(data, pos, wire)
+        return accounts
+    except (ValueError, UnicodeDecodeError):
+        return []
+
+
+def _parse_binary_account(data: bytes) -> dict[str, object] | None:
+    account: dict[str, object] = {"email": "", "gaia_id": "", "valid": True, "signed_out": False, "verified": True}
+    pos = 0
+    while pos < len(data):
+        tag, pos = _read_varint(data, pos)
+        field, wire = tag >> 3, tag & 7
+        if field in {3, 10} and wire == 2:
+            length, pos = _read_varint(data, pos)
+            end = pos + length
+            if end > len(data):
+                raise ValueError("Truncated ListAccounts string field")
+            account["email" if field == 3 else "gaia_id"] = data[pos:end].decode("utf-8")
+            pos = end
+        elif field in {9, 14, 15} and wire == 0:
+            raw, pos = _read_varint(data, pos)
+            account[{9: "valid", 14: "signed_out", 15: "verified"}[field]] = bool(raw)
+        else:
+            pos = _skip_wire_value(data, pos, wire)
+    return account if _email(account.get("email")) and account.get("gaia_id") else None
+
+
+def _parse_legacy_list_accounts(value: str) -> list[dict[str, object]]:
+    try:
+        text = value.strip()
+        if text.startswith(")]}'"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[4:]
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    accounts: list[dict[str, object]] = []
+    def visit(node: object) -> None:
+        if not isinstance(node, list):
+            return
+        if len(node) > 10 and isinstance(node[3], str) and "@" in node[3] and isinstance(node[10], str) and node[10]:
+            accounts.append({"email": node[3], "gaia_id": node[10], "valid": bool(node[9]) if len(node) > 9 and isinstance(node[9], (bool, int)) else True, "signed_out": bool(node[14]) if len(node) > 14 and isinstance(node[14], (bool, int)) else False, "verified": bool(node[15]) if len(node) > 15 and isinstance(node[15], (bool, int)) else True})
+            return
+        for child in node:
+            visit(child)
+    visit(parsed)
+    return accounts
+
+
+def _read_varint(data: bytes, pos: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while pos < len(data) and shift <= 63:
+        byte = data[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, pos
+        shift += 7
+    raise ValueError("Invalid protobuf varint")
+
+
+def _skip_wire_value(data: bytes, pos: int, wire: int) -> int:
+    if wire == 0:
+        _, pos = _read_varint(data, pos)
+    elif wire == 1:
+        pos += 8
+    elif wire == 2:
+        length, pos = _read_varint(data, pos)
+        pos += length
+    elif wire == 5:
+        pos += 4
+    else:
+        raise ValueError("Unsupported protobuf wire type")
+    if pos > len(data):
+        raise ValueError("Truncated protobuf value")
+    return pos
 
 
 def _profile_sort_key(name: str) -> tuple[int, str]:

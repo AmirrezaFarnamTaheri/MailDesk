@@ -10,7 +10,7 @@ Use **More recipient options** only when you need Cc/Bcc columns, filtering, sor
 
 ## 2. Message
 
-Start with the built-in **General message** template or create your own. Use placeholders such as `{{Name|there}}`, optional conditions, snippets, HTML, signatures and attachments as needed.
+Start with the built-in **General message** template or create your own. Use placeholders such as `{{Name|there}}`, optional conditions, snippets, HTML, signatures and attachments as needed. **Placeholder mapping** lets a reusable token such as `{{Name}}` read from any spreadsheet column, even when the source header has a different name. The live sheet stays beside the message preview so you can compare source values with the rendered message row by row.
 
 ## 3. Check
 
@@ -41,7 +41,7 @@ If Gmail returns an uncertain result during a draft or send operation, MailDesk 
 
 ## Browser senders
 
-Open **Senders → Browser senders** and add the browser profile, account index and expected email you want to use.
+Open **Senders → Browser senders** and choose a browser profile. MailDesk reads that profile and, when Chromium has cached the signed-in Google session, lists Gmail accounts in browser order so the account index and email can be filled automatically. Click **Rescan browsers** after signing in or changing accounts; manual account-index/email entry remains available as a fallback.
 
 ```text
 Chrome · Profile 1 · account 0 · personal@example.com
