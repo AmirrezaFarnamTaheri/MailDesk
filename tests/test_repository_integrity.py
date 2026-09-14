@@ -47,10 +47,13 @@ class RepositoryIntegrityTests(unittest.TestCase):
     def test_frozen_desktop_entrypoint_preserves_package_context(self):
         spec_text = (ROOT / "packaging" / "MailDesk.spec").read_text(encoding="utf-8")
         entry_text = (ROOT / "packaging" / "desktop_entry.py").read_text(encoding="utf-8")
+        desktop_text = (ROOT / "mailmerge_app" / "desktop.py").read_text(encoding="utf-8")
 
         self.assertIn("root / 'packaging' / 'desktop_entry.py'", spec_text)
         self.assertNotIn("root / 'mailmerge_app' / 'desktop.py'", spec_text)
         self.assertIn("from mailmerge_app.desktop import main", entry_text)
+        self.assertIn("_server_config()", desktop_text)
+        self.assertIn("use_colors=False", desktop_text)
 
     def test_desktop_script_can_bootstrap_without_package_context(self):
         expected = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
@@ -64,6 +67,29 @@ class RepositoryIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout.strip(), f"MailDesk {expected}")
+
+    def test_desktop_server_config_survives_windowed_process_without_stdio(self):
+        script = """
+import sys
+sys.stdout = None
+sys.stderr = None
+from mailmerge_app import desktop
+assert sys.stdout is not None
+assert sys.stderr is not None
+assert hasattr(sys.stdout, 'isatty')
+assert hasattr(sys.stderr, 'isatty')
+config = desktop._server_config()
+assert config.use_colors is False
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":
