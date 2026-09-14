@@ -1,6 +1,6 @@
 [project]
 name = "maildesk"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first spreadsheet mail merge desktop application with reusable templates, Gmail drafts/sending, browser Gmail slots, queues, and Google Sheets snapshots."
 requires-python = ">=3.11"
 dependencies = [
