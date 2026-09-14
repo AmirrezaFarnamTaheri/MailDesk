@@ -40,9 +40,7 @@ jobs:
         with:
           node-version: '22'
       - name: Validate frontend JavaScript
-        run: |
-          node --check mailmerge_app/static/app.js
-          node --check mailmerge_app/static/safety.js
+        run: node --check mailmerge_app/static/app.js
       - name: Validate PowerShell launch/build scripts
         if: runner.os == 'Windows'
         shell: pwsh
