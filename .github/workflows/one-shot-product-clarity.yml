@@ -44,12 +44,18 @@ jobs:
         run: |
           set -euo pipefail
           payload=.github/product-clarity.patch.gz.b64
-          test "$(wc -c < "$payload" | tr -d ' ')" = "16844"
-          test "$(sha256sum "$payload" | awk '{print $1}')" = "56c563456bfbb90fea60e6ff10fa82e2427ae06028a5846a3021e0f872be3412"
+          actual_bytes="$(wc -c < "$payload" | tr -d ' ')"
+          actual_payload_hash="$(sha256sum "$payload" | awk '{print $1}')"
+          echo "payload bytes: $actual_bytes"
+          echo "payload sha256: $actual_payload_hash"
+          test "$actual_bytes" = "16844"
+          test "$actual_payload_hash" = "56c563456bfbb90fea60e6ff10fa82e2427ae06028a5846a3021e0f872be3412"
           base64 -d "$payload" > /tmp/product-clarity.patch.gz
           gzip -t /tmp/product-clarity.patch.gz
           gzip -dc /tmp/product-clarity.patch.gz > /tmp/product-clarity.patch
-          test "$(sha256sum /tmp/product-clarity.patch | awk '{print $1}')" = "ce43da29ffc38e68f9bcc62cb78f0397b1bc74551b1615e8f34a7ec1d8143ee9"
+          actual_patch_hash="$(sha256sum /tmp/product-clarity.patch | awk '{print $1}')"
+          echo "patch sha256: $actual_patch_hash"
+          test "$actual_patch_hash" = "ce43da29ffc38e68f9bcc62cb78f0397b1bc74551b1615e8f34a7ec1d8143ee9"
           git apply --check /tmp/product-clarity.patch
           git apply /tmp/product-clarity.patch
 
