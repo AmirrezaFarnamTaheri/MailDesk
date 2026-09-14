@@ -48,7 +48,7 @@ from .sheet_reader import SUPPORTED_EXTENSIONS, column_profiles, list_sheets, su
 from .storage import Store
 from .template_engine import batch_fingerprint, html_to_text, is_valid_email, message_fingerprint, render_text, split_addresses
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
