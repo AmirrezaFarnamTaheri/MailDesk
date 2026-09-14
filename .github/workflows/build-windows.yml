@@ -113,11 +113,10 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[repair-release]'))
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          BOOTSTRAP_REPAIR: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[repair-release]') }}
           MANUAL_REPAIR: ${{ github.event_name == 'workflow_dispatch' && inputs.repair_existing_release }}
         run: |
           $pyproject = Get-Content -LiteralPath pyproject.toml -Raw
@@ -140,7 +139,7 @@ jobs:
             if (-not (Test-Path -LiteralPath $asset)) { throw "Missing release asset: $asset" }
           }
 
-          $repairRelease = $env:BOOTSTRAP_REPAIR -eq 'true' -or $env:MANUAL_REPAIR -eq 'true'
+          $repairRelease = $env:MANUAL_REPAIR -eq 'true'
           $tagCommit = gh api "repos/$env:GITHUB_REPOSITORY/commits/$tag" --jq '.sha' 2>$null
           $tagExists = $LASTEXITCODE -eq 0
           if ($tagExists -and $tagCommit.Trim() -ne $env:GITHUB_SHA) {
