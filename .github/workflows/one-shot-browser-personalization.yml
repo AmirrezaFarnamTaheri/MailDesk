@@ -32,6 +32,7 @@ jobs:
           python .github/browser_personalization_backend.py
           python .github/browser_personalization_frontend.py
           git diff --check
+          git add -N tests/test_browser_discovery.py tests/test_placeholder_mapping.py
           git diff --name-only | sort > /tmp/actual-files
           cat > /tmp/expected-files <<'EOF'
           docs/USER-GUIDE.md
