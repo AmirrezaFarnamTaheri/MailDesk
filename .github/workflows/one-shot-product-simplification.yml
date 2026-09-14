@@ -40,9 +40,9 @@ jobs:
           python .github/product-simplification/backend.py
           python .github/product-simplification/frontend.py
           git rm mailmerge_app/static/safety.js
-          git rm .github/product-simplification/backend.py
-          git rm .github/product-simplification/frontend.py
-          git rm .github/product-simplification/workflows.py
+          git rm -f .github/product-simplification/backend.py
+          git rm -f .github/product-simplification/frontend.py
+          git rm -f .github/product-simplification/workflows.py
           git rm .github/workflows/one-shot-product-simplification.yml
 
       - name: Install test dependencies
