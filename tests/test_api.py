@@ -63,7 +63,7 @@ class ApiFlowTests(unittest.TestCase):
         self.fail(f"Campaign did not reach a terminal state: {campaign}")
 
     def test_health_import_mapping_preview_and_render_validation(self):
-        self.assertEqual(self.client.get("/api/health").json()["version"], "0.2.0")
+        self.assertEqual(self.client.get("/api/health").json()["version"], self.main.APP_VERSION)
         upload = self.client.post("/api/imports", files={"file": ("contacts.xlsx", self._workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
         self.assertEqual(upload.status_code, 200, upload.text); data = upload.json()
         preview = self.client.get(f"/api/imports/{data['import_id']}/preview", params={"sheet":"Contacts"})
