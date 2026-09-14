@@ -11,9 +11,8 @@ for name in ("ci.yml", "build-windows.yml"):
         raise RuntimeError(f"obsolete safety.js workflow reference remains in {name}")
     path.write_text(text, encoding="utf-8")
 
-# re.sub treats backslashes in replacement strings as escapes. These transforms
-# intentionally contain source-code literals such as \\n and regex escapes, so
-# preserve each replacement verbatim instead of letting re.sub reinterpret it.
+# Regex replacement strings in these transforms contain source-code escapes.
+# Preserve replacement text verbatim instead of letting re.sub reinterpret it.
 for name in ("backend.py", "frontend.py"):
     path = root / ".github" / "product-simplification" / name
     text = path.read_text(encoding="utf-8")
