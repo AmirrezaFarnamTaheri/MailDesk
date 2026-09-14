@@ -9,7 +9,7 @@ const ids = [
   'ccTemplate','bccTemplate','attachmentColumn','renderButton','validationSummary','validationList',
   'browserDelivery','gmailDelivery','browserSender','browserSenderSummary','verifySelectedBrowserButton','gmailAccount','throttleMs','scheduleAt','campaignName','skipDuplicates','refreshBeforeReview',
   'batchChip','finalSummary','reviewedCheck','sendConfirmation','confirmText','expectedConfirm','exportReviewButton','queueCampaignButton','backStepButton','nextStepButton',
-  'reviewPosition','prevMessage','nextMessage','reviewEmpty','reviewContent','reviewStatus','reviewTo','reviewCc','reviewBcc','reviewSubject','reviewBody','htmlPreviewWrap','htmlPreview','reviewMeta',
+  'campaignReadiness','reviewPosition','prevMessage','nextMessage','reviewEmpty','reviewContent','reviewStatus','reviewTo','reviewCc','reviewBcc','reviewSubject','reviewBody','htmlPreviewWrap','htmlPreview','reviewMeta',
   'queueList','refreshQueueButton','oauthFile','includeSheetsScope','accountList','newBrowserSenderButton','browserRouteForm','browserSenderId','browserSenderLabel','browserProfile','gmailSlot','browserExpectedEmail','profileEmails','saveBrowserSenderButton','browserSenderList','maxBatchSize','defaultThrottle','saveSettingsButton','backupButton',
   'historyTable','refreshHistoryButton','firstRunDialog','finishOnboardingButton','snippetDialog','snippetName','snippetContent','saveSnippetDialogButton','verifyBrowserDialog','verifyBrowserText','confirmBrowserVerifiedButton',
   'toastStack','busyOverlay','busyTitle','busyDetail'
@@ -27,10 +27,10 @@ const state = {
 };
 
 const titles = {
-  campaign: ['New campaign', 'Prepare, verify and queue personalized email safely.'],
-  queue: ['Campaign queue', 'Pause, resume, retry or inspect persistent work.'],
-  accounts: ['Accounts & routing', 'Manage Google access and browser Gmail /u/N/ sender routes.'],
-  history: ['History', 'Audit every draft, send, browser compose and dry-run operation.'],
+  campaign: ['Compose campaign', 'Add recipients, write the message, check every row, then choose how to deliver it.'],
+  queue: ['Campaign queue', 'Track work in progress and resolve only what needs attention.'],
+  accounts: ['Senders & settings', 'Connect Gmail or configure a browser compose route.'],
+  history: ['Activity history', 'Audit every dry run, draft, browser compose and send.'],
 };
 
 async function api(url, options = {}) {
@@ -62,13 +62,69 @@ function setView(view){
   state.view=view; qsa('.nav-item').forEach(b=>b.classList.toggle('is-active',b.dataset.view===view));
   qsa('.view').forEach(v=>v.classList.remove('is-visible')); document.getElementById(`${view}View`).classList.add('is-visible');
   [els.viewTitle.textContent, els.viewSubtitle.textContent]=titles[view];
+  document.title=view==='campaign'?'MailDesk':`MailDesk — ${titles[view][0]}`;
   if(view==='queue') refreshQueue(); if(view==='history') refreshHistory(); if(view==='accounts') refreshAccountsAndBrowsers();
 }
 function setStep(step){
-  state.step=Math.min(5,Math.max(1,Number(step))); qsa('.workflow-step').forEach(b=>{const n=Number(b.dataset.step);b.classList.toggle('is-active',n===state.step);b.classList.toggle('is-complete',n<state.step);});
+  state.step=Math.min(5,Math.max(1,Number(step)));
+  qsa('.workflow-step').forEach(b=>{
+    const n=Number(b.dataset.step);
+    b.classList.toggle('is-active',n===state.step);
+    b.classList.toggle('is-complete',n<state.step);
+    if(n===state.step)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');
+  });
   qsa('.step-pane').forEach(p=>p.classList.toggle('is-visible',Number(p.dataset.stepPane)===state.step));
-  els.backStepButton.disabled=state.step===1; els.nextStepButton.textContent=state.step===5?'Back to start':'Next';
+  els.backStepButton.disabled=state.step===1;
+  els.nextStepButton.classList.toggle('is-hidden',state.step===5);
+  const labels={1:'Continue to message',2:'Continue to check',3:'Continue to delivery',4:'Review campaign'};
+  els.nextStepButton.textContent=labels[state.step]||'Continue';
+  updateReadiness();
   if(state.step===5) updateFinalSummary();
+}
+
+async function advanceStep(){
+  if(state.step===1){
+    if(!state.importId){toast('Add recipients first','Choose a local file or load a Google Sheet snapshot.','error');return;}
+    if(!els.toColumn.value){toast('Choose the email column','Select which spreadsheet column contains recipient email addresses.','error');return;}
+    setStep(2);return;
+  }
+  if(state.step===2){setStep(3);return;}
+  if(state.step===3){
+    if(!state.rendered||state.renderDirty)await renderCampaign(true);
+    const rendered=state.rendered;
+    if(!rendered||state.renderDirty)return;
+    if(!rendered.total){toast('No recipients selected','Adjust the selection or filter before continuing.','error');return;}
+    if(rendered.invalid){toast('Fix message errors first',`${rendered.invalid} message${rendered.invalid===1?' has':'s have'} blocking errors.`,'error',7000);return;}
+    setStep(4);return;
+  }
+  if(state.step===4){
+    const mode=currentMode();
+    if(mode==='browser'&&!els.browserSender.value){toast('Choose a browser sender','Select a verified browser compose route before review.','error');return;}
+    if(['draft','send'].includes(mode)&&!els.gmailAccount.value){toast('Choose a Gmail sender','Select a connected Google account before review.','error');return;}
+    setStep(5);
+  }
+}
+
+
+function readinessItem(label, ready, detail){
+  return `<div class="readiness-item ${ready?'is-ready':''}"><span class="readiness-icon">${ready?'✓':'•'}</span><div><strong>${esc(label)}</strong><small>${esc(detail)}</small></div></div>`;
+}
+function updateReadiness(){
+  if(!els.campaignReadiness)return;
+  const rendered=state.rendered, mode=currentMode();
+  const sourceReady=!!state.importId&&!!els.toColumn.value;
+  const hasMessage=!!els.subjectTemplate.value.trim()||!!els.bodyTemplate.value.trim()||!!els.bodyHtmlEditor.textContent.trim();
+  const checked=!!rendered&&!state.renderDirty&&rendered.total>0&&rendered.invalid===0;
+  const deliveryReady=mode==='dry_run'||(mode==='browser'&&!!els.browserSender.value)||(['draft','send'].includes(mode)&&!!els.gmailAccount.value);
+  const approved=checked&&els.reviewedCheck.checked&&(mode!=='send'||els.confirmText.value.trim()===expectedConfirmation());
+  const deliveryDetail=mode==='dry_run'?'Dry run selected — no external side effects.':deliveryReady?'Sender selected.':'Choose the sender or browser route.';
+  els.campaignReadiness.innerHTML=[
+    readinessItem('Recipients',sourceReady,sourceReady?'Source loaded and email column mapped.':'Load a source and map the email column.'),
+    readinessItem('Message',hasMessage,hasMessage?'Message content added.':'Write a subject or message.'),
+    readinessItem('Checked rows',checked,checked?`${rendered.total} message${rendered.total===1?'':'s'} ready.`:rendered&&rendered.invalid?`${rendered.invalid} row${rendered.invalid===1?'':'s'} need attention.`:'Check personalized messages before delivery.'),
+    readinessItem('Delivery',deliveryReady,deliveryDetail),
+    readinessItem('Approval',approved,approved?'Batch approved and ready to queue.':'Review the final batch and approve it.')
+  ].join('');
 }
 
 function setSourceTab(tab){ state.sourceTab=tab; qsa('.source-tab').forEach(b=>b.classList.toggle('is-active',b.dataset.sourceTab===tab)); qsa('.source-pane').forEach(p=>p.classList.remove('is-visible')); document.getElementById(tab==='file'?'fileSourcePane':'googleSourcePane').classList.add('is-visible'); }
@@ -176,7 +232,23 @@ function stripSources(messages){return messages.map(({source,...m})=>m);}
 
 function updateModeUI(){const mode=currentMode();qsa('.mode-card').forEach(c=>c.classList.toggle('is-selected',q('input',c).checked));els.browserDelivery.classList.toggle('is-hidden',mode!=='browser');els.gmailDelivery.classList.toggle('is-hidden',!['draft','send'].includes(mode));els.sendConfirmation.classList.toggle('is-hidden',mode!=='send');clearApproval();updateBrowserSenderSummary();updateFinalSummary();}
 function expectedConfirmation(){const r=state.rendered;return r&&currentMode()==='send'?`SEND ${r.messages.length} ${r.batch_id.slice(0,8).toUpperCase()}`:'';}
-function updateFinalSummary(){const r=state.rendered,mode=currentMode();els.batchChip.textContent=r?`Batch ${r.batch_id.slice(0,12)}${state.renderDirty?' · changed':''}`:'No batch';const sender=mode==='browser'?(state.browserSenders.find(s=>s.id===els.browserSender.value)?.expected_email||'No browser route'):['draft','send'].includes(mode)?(els.gmailAccount.value||'No Gmail account'):'No external sender';const schedule=els.scheduleAt.value?new Date(els.scheduleAt.value).toLocaleString():'Start when queued';els.finalSummary.innerHTML=`<div class="summary-card"><span>Messages</span><strong>${r?r.total:0} · ${r?r.invalid:0} errors${state.renderDirty?' · needs re-render/hash':''}</strong></div><div class="summary-card"><span>Mode</span><strong>${mode.replace('_',' ')}</strong></div><div class="summary-card"><span>Sender / route</span><strong>${esc(sender)}</strong></div><div class="summary-card"><span>Timing</span><strong>${esc(schedule)}</strong></div>`;const expected=expectedConfirmation();els.expectedConfirm.textContent=expected;els.confirmText.placeholder=expected;const okay=!!r&&!state.renderDirty&&r.total>0&&r.invalid===0&&els.reviewedCheck.checked&&(!['draft','send'].includes(mode)||!!els.gmailAccount.value)&&(mode!=='browser'||!!els.browserSender.value)&&(mode!=='send'||els.confirmText.value.trim()===expected);els.queueCampaignButton.disabled=!okay;els.queueCampaignButton.textContent=els.scheduleAt.value?'Schedule campaign':'Queue campaign';}
+function updateFinalSummary(){
+  const r=state.rendered,mode=currentMode();
+  els.batchChip.textContent=r?`Batch ${r.batch_id.slice(0,12)}${state.renderDirty?' · changed':''}`:'No batch';
+  const sender=mode==='browser'?(state.browserSenders.find(s=>s.id===els.browserSender.value)?.expected_email||'No browser route'):['draft','send'].includes(mode)?(els.gmailAccount.value||'No Gmail account'):'No external sender';
+  const schedule=els.scheduleAt.value?new Date(els.scheduleAt.value).toLocaleString():'Start when queued';
+  els.finalSummary.innerHTML=`<div class="summary-card"><span>Messages</span><strong>${r?r.total:0} · ${r?r.invalid:0} errors${state.renderDirty?' · needs re-check':''}</strong></div><div class="summary-card"><span>Mode</span><strong>${mode.replace('_',' ')}</strong></div><div class="summary-card"><span>Sender / route</span><strong>${esc(sender)}</strong></div><div class="summary-card"><span>Timing</span><strong>${esc(schedule)}</strong></div>`;
+  const expected=expectedConfirmation();els.expectedConfirm.textContent=expected;els.confirmText.placeholder=expected;
+  const okay=!!r&&!state.renderDirty&&r.total>0&&r.invalid===0&&els.reviewedCheck.checked&&(!['draft','send'].includes(mode)||!!els.gmailAccount.value)&&(mode!=='browser'||!!els.browserSender.value)&&(mode!=='send'||els.confirmText.value.trim()===expected);
+  const count=r?.total||0;
+  const plural=count===1?'message':'messages';
+  let action=els.scheduleAt.value?`Schedule ${count} ${plural}`:mode==='dry_run'?`Run dry test · ${count}`:mode==='browser'?`Open ${count} browser draft${count===1?'':'s'}`:mode==='draft'?`Create ${count} Gmail draft${count===1?'':'s'}`:`Send ${count} ${plural}`;
+  if(!r)action='Check messages before queueing';
+  els.queueCampaignButton.disabled=!okay;
+  els.queueCampaignButton.textContent=action;
+  els.queueCampaignButton.classList.toggle('danger',mode==='send');
+  updateReadiness();
+}
 async function queueCampaign(){
   const r=state.rendered;if(!r||state.renderDirty){toast('Render changed messages first','The reviewed batch is stale or still being updated.','error');return;}const mode=currentMode();
   if(state.source?.source_type==='google_sheet'&&els.refreshBeforeReview.checked){busy(true,'Refreshing Google Sheet before final approval…','A new snapshot will replace the reviewed batch.');try{const result=await api(`/api/imports/${state.importId}/refresh`,{method:'POST'});state.source=result;state.rowOverrides={};invalidateReview({clearRendered:true});await loadSheetPreview(true);await renderCampaign(false);els.refreshBeforeReview.checked=false;setStep(5);toast('Snapshot refreshed','Row edits were cleared. Review the new messages and approve again before queueing.','success',8000);}catch(error){toast('Could not refresh Google Sheet',error.message,'error',8000);}finally{busy(false);updateFinalSummary();}return;}
@@ -231,19 +303,19 @@ async function saveSettings(){try{state.settings=await api('/api/settings',jsonO
 async function createBackup(){try{const r=await api('/api/backup',{method:'POST'});toast('Backup created',r.backup,'success',8000);}catch(error){toast('Backup failed',error.message,'error');}}
 
 function saveUiState(){
-  const data={step:state.step,mode:currentMode(),campaignName:els.campaignName.value,throttleMs:els.throttleMs.value,skipDuplicates:els.skipDuplicates.checked,browserSender:els.browserSender.value,gmailAccount:els.gmailAccount.value,sourceTab:state.sourceTab};
+  const data={mode:currentMode(),campaignName:els.campaignName.value,throttleMs:els.throttleMs.value,skipDuplicates:els.skipDuplicates.checked,browserSender:els.browserSender.value,gmailAccount:els.gmailAccount.value,sourceTab:state.sourceTab};
   localStorage.setItem('maildesk-ui-state',JSON.stringify(data));
 }
 function restoreUiState(){
-  try{const data=JSON.parse(localStorage.getItem('maildesk-ui-state')||localStorage.getItem('mailmerge-ui-state')||'{}');if(data.mode){const radio=q(`input[name="mode"][value="${data.mode}"]`);if(radio)radio.checked=true;}if(data.campaignName)els.campaignName.value=data.campaignName;if(data.throttleMs)els.throttleMs.value=data.throttleMs;if(typeof data.skipDuplicates==='boolean')els.skipDuplicates.checked=data.skipDuplicates;if(data.browserSender&&state.browserSenders.some(x=>x.id===data.browserSender))els.browserSender.value=data.browserSender;if(data.gmailAccount&&state.gmailAccounts.some(x=>x.email===data.gmailAccount))els.gmailAccount.value=data.gmailAccount;if(data.sourceTab)setSourceTab(data.sourceTab);if(data.step)setStep(data.step);}catch{}
+  try{const data=JSON.parse(localStorage.getItem('maildesk-ui-state')||localStorage.getItem('mailmerge-ui-state')||'{}');if(data.mode){const radio=q(`input[name="mode"][value="${data.mode}"]`);if(radio)radio.checked=true;}if(data.campaignName)els.campaignName.value=data.campaignName;if(data.throttleMs)els.throttleMs.value=data.throttleMs;if(typeof data.skipDuplicates==='boolean')els.skipDuplicates.checked=data.skipDuplicates;if(data.browserSender&&state.browserSenders.some(x=>x.id===data.browserSender))els.browserSender.value=data.browserSender;if(data.gmailAccount&&state.gmailAccounts.some(x=>x.email===data.gmailAccount))els.gmailAccount.value=data.gmailAccount;if(data.sourceTab)setSourceTab(data.sourceTab);setStep(1);}catch{setStep(1);}
 }
 
-async function checkHealth(){try{const r=await api('/api/health');els.healthChip.innerHTML='<span class="status-dot"></span> Ready';els.versionLabel.textContent=`v${r.version}`;}catch{els.healthChip.textContent='Backend unavailable';}}
+async function checkHealth(){try{const r=await api('/api/health');els.healthChip.classList.remove('is-error');els.healthChip.innerHTML='<span class="status-dot"></span> App ready';els.versionLabel.textContent=`v${r.version}`;}catch{els.healthChip.classList.add('is-error');els.healthChip.textContent='App service unavailable';}}
 
 function bindEvents(){
   window.addEventListener('beforeunload', saveUiState);
   qsa('.nav-item').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));qsa('.workflow-step').forEach(b=>b.addEventListener('click',()=>setStep(b.dataset.step)));qsa('.source-tab').forEach(b=>b.addEventListener('click',()=>setSourceTab(b.dataset.sourceTab)));qsa('.editor-tab').forEach(b=>b.addEventListener('click',()=>setEditorTab(b.dataset.editor)));
-  els.nextStepButton.addEventListener('click',()=>setStep(state.step===5?1:state.step+1));els.backStepButton.addEventListener('click',()=>setStep(state.step-1));els.refreshButton.addEventListener('click',async()=>{await Promise.all([checkHealth(),refreshAccountsAndBrowsers()]);if(state.importId)await loadSheetPreview(false);toast('Refreshed');});
+  els.nextStepButton.addEventListener('click',advanceStep);els.backStepButton.addEventListener('click',()=>setStep(state.step-1));els.refreshButton.addEventListener('click',async()=>{await Promise.all([checkHealth(),refreshAccountsAndBrowsers()]);if(state.importId)await loadSheetPreview(false);toast('Refreshed');});
   els.sheetFile.addEventListener('change',()=>uploadSheet(els.sheetFile.files[0]));['dragenter','dragover'].forEach(ev=>els.dropzone.addEventListener(ev,e=>{e.preventDefault();els.dropzone.classList.add('is-dragging');}));['dragleave','drop'].forEach(ev=>els.dropzone.addEventListener(ev,e=>{e.preventDefault();els.dropzone.classList.remove('is-dragging');}));els.dropzone.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadSheet(f);});
   els.loadGoogleSheetButton.addEventListener('click',loadGoogleSheet);els.refreshGoogleSheetButton.addEventListener('click',refreshGoogleSheet);els.sheetSelect.addEventListener('change',()=>loadSheetPreview(true));els.headerRow.addEventListener('change',()=>loadSheetPreview(true));[els.toColumn,els.nameColumn,els.ccColumn,els.bccColumn,els.attachmentColumn,els.sortColumn,els.sortDirection].forEach(x=>x.addEventListener('change',scheduleRender));els.filterColumn.addEventListener('change',()=>{els.filterValue.disabled=!els.filterColumn.value||els.filterOperator.value==='not_empty';scheduleRender();});els.filterOperator.addEventListener('change',()=>{els.filterValue.disabled=els.filterOperator.value==='not_empty'||!els.filterColumn.value;scheduleRender();});[els.filterValue,els.rowLimit].forEach(x=>x.addEventListener('input',scheduleRender));els.trimValues.addEventListener('change',scheduleRender);els.selectVisibleButton.addEventListener('click',()=>{state.previewRows.forEach(r=>state.selectedRows.add(r._row));renderSheetPreview();updateSelectionSummary();scheduleRender();});els.clearVisibleButton.addEventListener('click',()=>{state.previewRows.forEach(r=>state.selectedRows.delete(r._row));renderSheetPreview();updateSelectionSummary();scheduleRender();});
   els.templateSelect.addEventListener('change',loadTemplateIntoForm);els.newTemplateButton.addEventListener('click',newTemplate);els.saveTemplateButton.addEventListener('click',()=>saveTemplate().catch(e=>toast('Could not save template',e.message,'error')));els.deleteTemplateButton.addEventListener('click',()=>deleteTemplate().catch(e=>toast('Could not delete template',e.message,'error')));[els.subjectTemplate,els.bodyTemplate,els.ccTemplate,els.bccTemplate].forEach(x=>{x.addEventListener('focus',()=>state.activeEditor=x);x.addEventListener('input',scheduleRender);});[els.bodyHtmlEditor,els.signatureHtmlEditor].forEach(x=>{x.addEventListener('focus',()=>state.activeEditor=x);x.addEventListener('input',scheduleRender);});qsa('[data-rich]').forEach(b=>b.addEventListener('click',()=>{document.execCommand(b.dataset.rich,false,null);els.bodyHtmlEditor.focus();scheduleRender();}));els.clearFormattingButton.addEventListener('click',()=>{document.execCommand('removeFormat',false,null);scheduleRender();});els.newSnippetButton.addEventListener('click',()=>els.snippetDialog.showModal());els.saveSnippetDialogButton.addEventListener('click',saveSnippetFromDialog);els.attachmentFile.addEventListener('change',()=>uploadAttachments(els.attachmentFile.files));els.renderButton.addEventListener('click',()=>renderCampaign(true));

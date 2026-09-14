@@ -57,6 +57,29 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("SUBJECT_LINE_ERROR", SAFETY_JS)
         self.assertIn("/\\r|\\n/.test(els.reviewSubject.value)", SAFETY_JS)
 
+    def test_campaign_flow_uses_progressive_disclosure_for_optional_controls(self):
+        self.assertIn('Optional: filter, sort or limit recipients', INDEX_HTML)
+        self.assertNotIn('<details class="advanced" open>', INDEX_HTML)
+        self.assertIn('Optional: pacing and duplicate handling', INDEX_HTML)
+
+    def test_campaign_readiness_summary_is_wired_end_to_end(self):
+        self.assertIn('id="campaignReadiness"', INDEX_HTML)
+        self.assertIn('function updateReadiness()', APP_JS)
+        self.assertIn("readinessItem('Recipients'", APP_JS)
+        self.assertIn("readinessItem('Approval'", APP_JS)
+
+    def test_wizard_does_not_restore_a_stale_step_without_runtime_state(self):
+        self.assertNotIn('step:state.step', APP_JS)
+        self.assertIn('if(data.sourceTab)setSourceTab(data.sourceTab);setStep(1);', APP_JS)
+        self.assertIn('Continue to message', APP_JS)
+        self.assertIn('Review campaign', APP_JS)
+
+    def test_final_action_label_matches_delivery_mode(self):
+        self.assertIn('Run dry test', APP_JS)
+        self.assertIn('Open ${count} browser draft', APP_JS)
+        self.assertIn('Create ${count} Gmail draft', APP_JS)
+        self.assertIn('`Send ${count} ${plural}`', APP_JS)
+
 
 if __name__ == "__main__":
     unittest.main()
