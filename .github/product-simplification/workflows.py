@@ -20,6 +20,12 @@ for name in ("backend.py", "frontend.py"):
     new = "output, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=flags)"
     if old not in text:
         raise RuntimeError(f"literal replacement patch target missing in {name}")
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    text = text.replace(old, new, 1)
+    if name == "frontend.py":
+        marker = "commit_edit = '''"
+        if marker not in text:
+            raise RuntimeError("commitReviewEdit replacement block is missing")
+        text = text.replace(marker, "commit_edit = r'''", 1)
+    path.write_text(text, encoding="utf-8")
 
 print("workflow and transform plumbing simplified")
