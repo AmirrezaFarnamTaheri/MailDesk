@@ -1,4 +1,4 @@
-name: One-shot product clarity pass
+name: One-shot product clarity cleanup
 
 on:
   push:
@@ -9,115 +9,22 @@ permissions:
   contents: write
 
 jobs:
-  apply-product-clarity:
+  cleanup:
+    if: github.event.head_commit.message == 'chore: run product clarity cleanup'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Gate one-shot execution
-        id: gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" = "chore: run product clarity pass" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "One-shot patch is not requested by this commit."
-          fi
-
-      - uses: actions/setup-python@v7
-        if: steps.gate.outputs.should_run == 'true'
-        with:
-          python-version: '3.11'
-
-      - uses: actions/setup-node@v7
-        if: steps.gate.outputs.should_run == 'true'
-        with:
-          node-version: '22'
-
-      - name: Reconstruct and verify reviewed product clarity patch
-        if: steps.gate.outputs.should_run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from hashlib import sha256
-          from pathlib import Path
-
-          root = Path('.github/product-clarity-chunks')
-          specs = [
-              ('00', 2800, 'dcef4ecb8181ef18f4d4fd0d3384477e8629836b2f93a6617b3208e0c99e5d19'),
-              ('01', 2800, '38bfc32dc664a0ff7a3108cb6d321710f3ef800eaf456ac7dc1d2ef45b76c0b9'),
-              ('02', 2800, '0f5d4b375cdda8bc9ad575ba536c5b59ea3ff181b189e37de24829634340ca2f'),
-              ('03', 2800, 'd3e7c41974baffd4f3873467f1767fbf77f3d26509a2c0514a00530e6406368f'),
-              ('04', 2800, 'fa38d314139fe11cf7ec29af7df67027cc1068a35b5fcb08dca7f081200bce95'),
-              ('05', 2800, '414855159b074d62ac736392a960bd89be17cd74fd695ea96120391c67591839'),
-              ('06', 44, '4fb9bfcf4f0f68f5189f7ed73d7f8803a101fe0468fab44c981695ef76ff212b'),
-          ]
-          alphabet = b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
-          rebuilt = bytearray()
-          for name, expected_len, expected_hash in specs:
-              data = (root / name).read_bytes()
-              digest = sha256(data).hexdigest()
-              if len(data) == expected_len and digest == expected_hash:
-                  fixed = data
-                  print(f'chunk {name}: exact')
-              elif len(data) == expected_len - 1:
-                  fixed = None
-                  for pos in range(expected_len):
-                      prefix, suffix = data[:pos], data[pos:]
-                      for ch in alphabet:
-                          candidate = prefix + bytes((ch,)) + suffix
-                          if sha256(candidate).hexdigest() == expected_hash:
-                              fixed = candidate
-                              print(f'chunk {name}: recovered missing byte at offset {pos}')
-                              break
-                      if fixed is not None:
-                          break
-                  if fixed is None:
-                      raise SystemExit(f'chunk {name}: one-byte recovery did not match expected SHA-256')
-              else:
-                  raise SystemExit(f'chunk {name}: unexpected length/hash ({len(data)} bytes, {digest})')
-              rebuilt.extend(fixed)
-
-          payload = bytes(rebuilt)
-          expected_payload = '56c563456bfbb90fea60e6ff10fa82e2427ae06028a5846a3021e0f872be3412'
-          actual_payload = sha256(payload).hexdigest()
-          if len(payload) != 16844 or actual_payload != expected_payload:
-              raise SystemExit(f'canonical payload mismatch: {len(payload)} bytes {actual_payload}')
-          Path('/tmp/product-clarity.patch.gz.b64').write_bytes(payload)
-          print(f'canonical payload verified: {len(payload)} bytes {actual_payload}')
-          PY
-          base64 -d /tmp/product-clarity.patch.gz.b64 > /tmp/product-clarity.patch.gz
-          gzip -t /tmp/product-clarity.patch.gz
-          gzip -dc /tmp/product-clarity.patch.gz > /tmp/product-clarity.patch
-          test "$(sha256sum /tmp/product-clarity.patch | awk '{print $1}')" = 'ce43da29ffc38e68f9bcc62cb78f0397b1bc74551b1615e8f34a7ec1d8143ee9'
-          git apply --check /tmp/product-clarity.patch
-          git apply /tmp/product-clarity.patch
-
-      - name: Validate frontend and test suite
-        if: steps.gate.outputs.should_run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install -r requirements-dev.txt
-          python -m pip check
-          node --check mailmerge_app/static/app.js
-          node --check mailmerge_app/static/safety.js
-          python -m compileall -q mailmerge_app
-          python -m unittest discover -s tests -v
-
-      - name: Commit product clarity improvements
-        if: steps.gate.outputs.should_run == 'true'
+      - name: Remove one-shot transport files
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add mailmerge_app/static/index.html mailmerge_app/static/app.js mailmerge_app/static/app.css tests/test_frontend_integrity.py
-          git diff --cached --check
-          git commit -m 'feat: simplify campaign workflow and product clarity'
+          git rm -r .github/product-clarity-chunks
+          git rm .github/product-clarity.patch.gz.b64
+          git rm .github/product-clarity.trigger
+          git commit -m 'chore: remove product clarity transport files'
           git push origin HEAD:main
