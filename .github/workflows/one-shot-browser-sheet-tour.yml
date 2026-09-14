@@ -1,0 +1,147 @@
+name: One-shot browser, sheet viewer, and tour improvements
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: "${{ github.event.head_commit.message == 'chore: apply browser detection and sheet viewer improvements' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing anchor in {path}: {old[:80]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # Browser profile reading: tolerate Chromium writing Preferences while we scan,
+          # and expose cache age so the UI never presents cached account order as live truth.
+          replace_once('mailmerge_app/browser_profiles.py',
+          '''def _read_json(path: Path) -> dict:\n    try:\n        decoded = json.loads(path.read_text(encoding="utf-8"))\n        return decoded if isinstance(decoded, dict) else {}\n    except (OSError, json.JSONDecodeError, UnicodeDecodeError):\n        return {}\n''',
+          '''def _read_json(path: Path) -> dict:\n    # Chromium rewrites Preferences atomically and a scan can land between replace\n    # operations. A couple of short retries avoid reporting an empty profile just\n    # because the browser happened to be persisting state at that instant.\n    for attempt in range(3):\n        try:\n            decoded = json.loads(path.read_text(encoding="utf-8"))\n            return decoded if isinstance(decoded, dict) else {}\n        except (OSError, json.JSONDecodeError, UnicodeDecodeError):\n            if attempt < 2:\n                time.sleep(0.04 * (attempt + 1))\n    return {}\n''')
+
+          replace_once('mailmerge_app/browser_profiles.py',
+          '''            preferences = _read_json(user_data / profile_dir / "Preferences")\n            primary_email, gmail_accounts, emails = _extract_profile_accounts(info, preferences)\n            output.append(\n                {\n''',
+          '''            preferences_path = user_data / profile_dir / "Preferences"\n            preferences = _read_json(preferences_path)\n            primary_email, gmail_accounts, emails = _extract_profile_accounts(info, preferences)\n            try:\n                session_cache_age_seconds = max(0, int(time.time() - preferences_path.stat().st_mtime))\n            except OSError:\n                session_cache_age_seconds = None\n            for account in gmail_accounts:\n                account["cache_age_seconds"] = session_cache_age_seconds\n            output.append(\n                {\n''')
+          replace_once('mailmerge_app/browser_profiles.py',
+          '''                    "gmail_accounts": gmail_accounts,\n                    "emails": emails,\n                    "profile_id": f"{browser_id}|{profile_dir}",\n''',
+          '''                    "gmail_accounts": gmail_accounts,\n                    "emails": emails,\n                    "session_cache_age_seconds": session_cache_age_seconds,\n                    "profile_id": f"{browser_id}|{profile_dir}",\n''')
+
+          # Browser sender save/verification: force a disk rescan and reject a stale/wrong
+          # slot -> email mapping whenever Chromium does have ordered ListAccounts data.
+          replace_once('mailmerge_app/main.py',
+          '''    profiles = await asyncio.to_thread(discover_profiles)\n    selected = next((p for p in profiles if p["browser_id"] == payload.browser_id and p["profile_dir"] == payload.profile_dir), None)\n    if selected is None:\n        raise HTTPException(400, "The selected browser profile is not currently available.")\n    existing = store.get_browser_sender(sender_id)\n''',
+          '''    profiles = await asyncio.to_thread(discover_profiles, force_refresh=True)\n    selected = next((p for p in profiles if p["browser_id"] == payload.browser_id and p["profile_dir"] == payload.profile_dir), None)\n    if selected is None:\n        raise HTTPException(400, "The selected browser profile is not currently available.")\n    detected_accounts = selected.get("gmail_accounts") if isinstance(selected, dict) else []\n    if isinstance(detected_accounts, list) and detected_accounts:\n        detected = next((a for a in detected_accounts if int(a.get("slot", -1)) == payload.gmail_slot), None)\n        if detected is None:\n            raise HTTPException(409, f"The browser cache has no Gmail account at index {payload.gmail_slot}. Rescan and choose a detected account.")\n        detected_email = str(detected.get("email") or "")\n        if detected_email.casefold() != payload.expected_email.strip().casefold():\n            raise HTTPException(409, f"Browser account {payload.gmail_slot} is currently cached as {detected_email}, not {payload.expected_email}. Rescan or choose the matching account.")\n    existing = store.get_browser_sender(sender_id)\n''')
+
+          replace_once('mailmerge_app/main.py',
+          '''    profile = _profile_for_sender(sender)\n    launch_url(profile, inbox_url(int(sender["gmail_slot"])))\n    return {"opened": True, "expected_email": sender["expected_email"], "gmail_slot": sender["gmail_slot"]}\n''',
+          '''    profiles = await asyncio.to_thread(discover_profiles, force_refresh=True)\n    profile = next((p for p in profiles if p["browser_id"] == sender["browser_id"] and p["profile_dir"] == sender["profile_dir"]), None)\n    if profile is None:\n        raise HTTPException(409, "The saved browser profile is no longer available. Rescan browsers and update this sender.")\n    slot = int(sender["gmail_slot"])\n    expected = str(sender["expected_email"])\n    accounts = profile.get("gmail_accounts") if isinstance(profile, dict) else []\n    detected_email = ""\n    if isinstance(accounts, list) and accounts:\n        detected = next((a for a in accounts if int(a.get("slot", -1)) == slot), None)\n        if detected is None:\n            raise HTTPException(409, f"Gmail account index {slot} is no longer present in this browser profile. Rescan and update the sender.")\n        detected_email = str(detected.get("email") or "")\n        if detected_email.casefold() != expected.casefold():\n            raise HTTPException(409, f"Browser account {slot} now maps to {detected_email}, not {expected}. Update the sender before continuing.")\n    launch_url(profile, inbox_url(slot))\n    return {\n        "opened": True,\n        "expected_email": expected,\n        "detected_email": detected_email,\n        "gmail_slot": slot,\n        "session_cache_age_seconds": profile.get("session_cache_age_seconds"),\n    }\n''')
+
+          # Full spreadsheet viewer endpoint with paging and search. The campaign preview
+          # remains lightweight; this endpoint exists only for the explicit viewer.
+          anchor = '''@app.post("/api/render")\nasync def render_messages(payload: RenderRequest) -> dict[str, Any]:\n'''
+          addition = '''@app.get("/api/imports/{import_id}/rows")\nasync def import_rows(\n    import_id: str,\n    sheet: str = Query(...),\n    header_row: int | None = Query(default=None, ge=1, le=1000),\n    offset: int = Query(default=0, ge=0),\n    limit: int = Query(default=100, ge=1, le=200),\n    q: str = Query(default="", max_length=200),\n) -> dict[str, Any]:\n    path = _import_path(import_id)\n    try:\n        headers, rows, detected = await asyncio.to_thread(table, path, sheet, header_row)\n    except Exception as exc:\n        raise HTTPException(400, _safe_error(exc)) from exc\n    query = q.strip().casefold()\n    if query:\n        rows = [\n            row for row in rows\n            if query in str(row.get("_row", "")).casefold()\n            or any(query in str(row.get(header, "")).casefold() for header in headers)\n        ]\n    total = len(rows)\n    page = rows[offset: offset + limit]\n    return {\n        "headers": headers,\n        "header_row": detected,\n        "total": total,\n        "offset": offset,\n        "limit": limit,\n        "rows": page,\n        "source": _public_import(_import_meta(import_id)),\n    }\n\n\n@app.post("/api/render")\nasync def render_messages(payload: RenderRequest) -> dict[str, Any]:\n'''
+          replace_once('mailmerge_app/main.py', anchor, addition)
+
+          # Spreadsheet viewer UI and clearer browser-account language.
+          replace_once('mailmerge_app/static/index.html',
+          '''<div class="mini-toolbar"><div><strong id="sheetSummary">0 rows</strong><span id="selectionSummary"> · all selected</span></div><div class="toolbar-actions"><button class="button ghost small" id="selectVisibleButton">Select visible</button><button class="button ghost small" id="clearVisibleButton">Clear visible</button></div></div>''',
+          '''<div class="mini-toolbar"><div><strong id="sheetSummary">0 rows</strong><span id="selectionSummary"> · all selected</span></div><div class="toolbar-actions"><button class="button secondary small" id="openSheetViewerButton">Open sheet viewer</button><button class="button ghost small" id="selectVisibleButton">Select visible</button><button class="button ghost small" id="clearVisibleButton">Clear visible</button></div></div>''')
+
+          replace_once('mailmerge_app/static/index.html',
+          '''<div class="panel-head"><div><h2>Browser senders</h2><p>Open Gmail compose windows in an existing browser profile.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add sender</button></div>''',
+          '''<div class="panel-head"><div><h2>Browser senders</h2><p>MailDesk can read Chromium’s cached account order, then verifies the live Gmail account before use.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add sender</button></div>''')
+          replace_once('mailmerge_app/static/index.html',
+          '''<p class="hint" id="browserDetectionHint">Choose a browser profile to inspect its cached signed-in Gmail accounts.</p>''',
+          '''<p class="hint" id="browserDetectionHint">Detected addresses come from the browser’s cached Google session, not from the live Gmail page. Rescan before saving and verify once in Gmail.</p>''')
+
+          replace_once('mailmerge_app/static/index.html',
+          '''  <dialog id="snippetDialog" class="modal"><form method="dialog"><h2>Reusable snippet</h2>''',
+          '''  <dialog id="sheetViewerDialog" class="sheet-viewer-dialog">\n    <div class="sheet-viewer-shell">\n      <div class="sheet-viewer-head"><div><h2>Spreadsheet viewer</h2><p id="sheetViewerMeta">Inspect the loaded worksheet without changing it.</p></div><button type="button" class="button secondary small" id="closeSheetViewerButton">Close</button></div>\n      <div class="sheet-viewer-toolbar"><input id="sheetViewerSearch" type="search" placeholder="Search rows…" aria-label="Search spreadsheet rows"><span id="sheetViewerRange">0 rows</span></div>\n      <div class="sheet-viewer-table-wrap"><table class="data-table sheet-viewer-table" id="sheetViewerTable"></table></div>\n      <div class="sheet-viewer-footer"><button type="button" class="button secondary" id="sheetViewerPrev">Previous</button><span id="sheetViewerPage">Page 1</span><button type="button" class="button secondary" id="sheetViewerNext">Next</button></div>\n    </div>\n  </dialog>\n  <dialog id="snippetDialog" class="modal"><form method="dialog"><h2>Reusable snippet</h2>''')
+
+          # JS ids/state.
+          replace_once('mailmerge_app/static/app.js',
+          ''''sheetSelect','headerRow','toColumn','nameColumn','ccColumn','bccColumn','filterColumn','filterOperator','filterValue','sortColumn','sortDirection','rowLimit','trimValues','mappingCallout','sheetPreviewWrap','sheetSummary','selectionSummary','sheetPreview','selectVisibleButton','clearVisibleButton',''' ,
+          ''''sheetSelect','headerRow','toColumn','nameColumn','ccColumn','bccColumn','filterColumn','filterOperator','filterValue','sortColumn','sortDirection','rowLimit','trimValues','mappingCallout','sheetPreviewWrap','sheetSummary','selectionSummary','sheetPreview','openSheetViewerButton','selectVisibleButton','clearVisibleButton','sheetViewerDialog','closeSheetViewerButton','sheetViewerMeta','sheetViewerSearch','sheetViewerRange','sheetViewerTable','sheetViewerPrev','sheetViewerNext','sheetViewerPage',''' )
+          replace_once('mailmerge_app/static/app.js',
+          '''  campaigns: [], verifyingSenderId: '', sourceTab: 'file', tourIndex: 0, tourPreviousFocus: null,\n''',
+          '''  campaigns: [], verifyingSenderId: '', sourceTab: 'file', tourIndex: 0, tourPreviousFocus: null,\n  sheetViewerOffset: 0, sheetViewerTotal: 0, sheetViewerLimit: 100, sheetViewerQuery: '', sheetViewerTimer: null,\n''')
+
+          # Viewer functions after the compact preview renderer.
+          viewer_anchor = '''function updateSelectionSummary(){els.selectionSummary.textContent=state.selectedRows.size===state.allRowNumbers.length?' · all selected':` · ${state.selectedRows.size} selected`;}\n'''
+          viewer_code = '''function updateSelectionSummary(){els.selectionSummary.textContent=state.selectedRows.size===state.allRowNumbers.length?' · all selected':` · ${state.selectedRows.size} selected`;}\nasync function openSheetViewer(){\n  if(!state.importId||!els.sheetSelect.value){toast('Load a spreadsheet first','','error');return;}\n  state.sheetViewerOffset=0;state.sheetViewerQuery='';els.sheetViewerSearch.value='';els.sheetViewerDialog.showModal();await loadSheetViewer();\n}\nasync function loadSheetViewer(){\n  if(!state.importId||!els.sheetSelect.value)return;\n  const params=new URLSearchParams({sheet:els.sheetSelect.value,offset:String(state.sheetViewerOffset),limit:String(state.sheetViewerLimit)});\n  if(els.headerRow.value)params.set('header_row',els.headerRow.value);if(state.sheetViewerQuery)params.set('q',state.sheetViewerQuery);\n  els.sheetViewerRange.textContent='Loading…';\n  try{const result=await api(`/api/imports/${state.importId}/rows?${params}`);state.sheetViewerTotal=result.total;renderSheetViewer(result);}\n  catch(error){els.sheetViewerRange.textContent='Could not load rows';toast('Sheet viewer failed',error.message,'error');}\n}\nfunction renderSheetViewer(result){\n  const rows=result.rows||[],headers=result.headers||[];els.sheetViewerTable.innerHTML='';\n  const thead=document.createElement('thead'),hr=document.createElement('tr');const rhead=document.createElement('th');rhead.textContent='Row';hr.append(rhead);headers.forEach(h=>{const th=document.createElement('th');th.textContent=h;hr.append(th);});thead.append(hr);els.sheetViewerTable.append(thead);\n  const tbody=document.createElement('tbody');rows.forEach(row=>{const tr=document.createElement('tr');const rn=document.createElement('td');rn.className='row-number';rn.textContent=row._row;tr.append(rn);headers.forEach(h=>{const td=document.createElement('td');td.textContent=row[h]??'';td.title=String(row[h]??'');tr.append(td);});tbody.append(tr);});els.sheetViewerTable.append(tbody);\n  const start=result.total?result.offset+1:0,end=Math.min(result.offset+rows.length,result.total);els.sheetViewerRange.textContent=`${start}–${end} of ${result.total}`;els.sheetViewerMeta.textContent=`${state.source?.filename||'Spreadsheet'} · ${els.sheetSelect.value} · header row ${result.header_row}`;els.sheetViewerPage.textContent=`Page ${Math.floor(result.offset/result.limit)+1} of ${Math.max(1,Math.ceil(result.total/result.limit))}`;els.sheetViewerPrev.disabled=result.offset<=0;els.sheetViewerNext.disabled=result.offset+result.limit>=result.total;\n}\n'''
+          replace_once('mailmerge_app/static/app.js', viewer_anchor, viewer_code)
+
+          # Browser detection UI: no more implication that cached means live.
+          old_render = '''function renderBrowserProfiles(){const prev=els.browserProfile.value;els.browserProfile.innerHTML='';state.browserProfiles.forEach(p=>{const o=document.createElement('option');o.value=p.profile_id;o.textContent=`${p.browser_name} · ${p.profile_name}${p.primary_email?` · ${p.primary_email}`:''}`;els.browserProfile.append(o);});if(state.browserProfiles.some(p=>p.profile_id===prev))els.browserProfile.value=prev;updateProfileEmailHints();}\n'''
+          new_render = '''function renderBrowserProfiles(){const prev=els.browserProfile.value;els.browserProfile.innerHTML='';state.browserProfiles.forEach(p=>{const o=document.createElement('option');o.value=p.profile_id;const count=(p.gmail_accounts||[]).length;o.textContent=`${p.browser_name} · ${p.profile_name}${count?` · ${count} cached Gmail account${count===1?'':'s'}`:''}`;els.browserProfile.append(o);});if(state.browserProfiles.some(p=>p.profile_id===prev))els.browserProfile.value=prev;updateProfileEmailHints();}\n'''
+          replace_once('mailmerge_app/static/app.js', old_render, new_render)
+          old_detect = '''if(!accounts.length){els.detectedBrowserAccounts.innerHTML='<div class="empty-inline">No ordered Gmail session accounts found in this profile.</div>';els.browserDetectionHint.textContent=(p.emails||[]).length?'MailDesk found profile email hints, but not enough browser-session data to determine Gmail account indexes. Use the manual fallback below.':'Sign in to Gmail in this browser profile, then click Rescan browsers. You can also use the manual fallback.';return;}els.browserDetectionHint.textContent='Detected from the browser’s cached Google session. Select an account, then verify it once in Gmail before use.';accounts.forEach(account=>{'''
+          new_detect = '''if(!accounts.length){els.detectedBrowserAccounts.innerHTML='<div class="empty-inline">No ordered Gmail session accounts found in this profile.</div>';els.browserDetectionHint.textContent=(p.emails||[]).length?'Profile email hints exist, but Chromium did not persist an ordered Gmail session list. Use the manual fallback and verify it in Gmail.':'Sign in to Gmail in this browser profile, then click Rescan browsers. You can also use the manual fallback.';return;}const age=Number(p.session_cache_age_seconds);const ageText=Number.isFinite(age)?(age<60?'updated moments ago':age<3600?`updated ${Math.max(1,Math.round(age/60))} min ago`:`updated ${Math.round(age/3600)} h ago`):'cache age unknown';els.browserDetectionHint.textContent=`Cached browser account order · ${ageText}. Select an account, then use Verify to confirm the live Gmail page before sending.`;accounts.forEach(account=>{'''
+          replace_once('mailmerge_app/static/app.js', old_detect, new_detect)
+          replace_once('mailmerge_app/static/app.js',
+          '''els.verifyBrowserText.innerHTML=`Check the browser window that opened and confirm it shows <strong>${esc(result.expected_email)}</strong> as account ${result.gmail_slot}.`;''',
+          '''const cached=result.detected_email?` MailDesk’s fresh browser cache also maps this index to <strong>${esc(result.detected_email)}</strong>.`:'';els.verifyBrowserText.innerHTML=`Check the Gmail window that opened. Confirm the signed-in account is <strong>${esc(result.expected_email)}</strong> at account index ${result.gmail_slot}.${cached}`;''')
+
+          # Expanded tour: navigate to the relevant pane/view for each explanation.
+          tour_pattern = re.compile(r'''const tourSteps=\[.*?\];\nfunction startTour\(\)\{.*?\}\nfunction showTourStep\(index\)\{.*?\}\n''', re.S)
+          tour_replacement = '''const tourSteps=[\n  {view:'campaign',step:1,selector:'.workflow-strip',title:'The campaign flow',text:'MailDesk works in five stages: load recipients, write the message, check personalized results, choose delivery, then review the final action.'},\n  {view:'campaign',step:1,selector:'#dropzone',title:'Load recipients',text:'Start with Excel or CSV, or switch to Google Sheets. MailDesk detects worksheets, the header row, and likely email/name columns.'},\n  {view:'campaign',step:1,selector:'#sheetSelect',title:'Inspect the source',text:'After loading a source, use Open sheet viewer to browse and search the worksheet in a larger spreadsheet-style window. The compact table remains editable for campaign-only corrections.'},\n  {view:'campaign',step:2,selector:'.placeholder-mapper',title:'Personalize the message',text:'Templates stay reusable because placeholders map to this sheet’s columns. Auto-match gets you started, and defaults such as {{Name|there}} handle blanks.'},\n  {view:'campaign',step:3,selector:'#validationSummary',title:'Check every generated message',text:'MailDesk renders the batch before delivery. Errors block processing; warnings stay visible so you can inspect the affected row and message.'},\n  {view:'campaign',step:4,selector:'.mode-grid',title:'Choose delivery',text:'Dry run changes nothing. Browser compose opens Gmail windows. Gmail drafts create drafts through the API. Send is the only mode that transmits email.'},\n  {view:'campaign',step:5,selector:'.review-rail',title:'Review source and message together',text:'The review rail keeps the current spreadsheet row beside the personalized message, so you can move through recipients without losing context.'},\n  {view:'accounts',selector:'#browserRouteForm',title:'Set up senders carefully',text:'Connected Gmail accounts are verified through Google. Browser senders use Chromium’s cached account order as a hint, then MailDesk opens Gmail and asks you to verify the live account before use.'},\n];\nfunction startTour(){state.tourPreviousFocus=document.activeElement;els.tourOverlay.classList.remove('is-hidden');els.tourOverlay.setAttribute('aria-hidden','false');showTourStep(0);}\nfunction showTourStep(index){state.tourIndex=Math.max(0,Math.min(tourSteps.length-1,index));const step=tourSteps[state.tourIndex];if(step.view)setView(step.view);if(step.view==='campaign'&&step.step)setStep(step.step);els.tourStepLabel.textContent=`${state.tourIndex+1} of ${tourSteps.length}`;els.tourTitle.textContent=step.title;els.tourText.textContent=step.text;els.tourBackButton.disabled=state.tourIndex===0;els.tourNextButton.textContent=state.tourIndex===tourSteps.length-1?'Start using MailDesk':'Next';requestAnimationFrame(()=>{const target=q(step.selector);if(target)target.scrollIntoView({block:'center',behavior:'instant'});requestAnimationFrame(()=>{positionTour();els.tourNextButton.focus();});});}\n'''
+          p=Path('mailmerge_app/static/app.js');text=p.read_text(encoding='utf-8');text2,count=tour_pattern.subn(tour_replacement,text,count=1)
+          if count!=1: raise SystemExit('tour block anchor failed')
+          p.write_text(text2,encoding='utf-8')
+
+          # Bind viewer controls.
+          replace_once('mailmerge_app/static/app.js',
+          '''els.trimValues.addEventListener('change',scheduleRender);els.selectVisibleButton.addEventListener('click',''',
+          '''els.trimValues.addEventListener('change',scheduleRender);els.openSheetViewerButton.addEventListener('click',openSheetViewer);els.closeSheetViewerButton.addEventListener('click',()=>els.sheetViewerDialog.close());els.sheetViewerPrev.addEventListener('click',()=>{state.sheetViewerOffset=Math.max(0,state.sheetViewerOffset-state.sheetViewerLimit);loadSheetViewer();});els.sheetViewerNext.addEventListener('click',()=>{state.sheetViewerOffset+=state.sheetViewerLimit;loadSheetViewer();});els.sheetViewerSearch.addEventListener('input',()=>{clearTimeout(state.sheetViewerTimer);state.sheetViewerTimer=setTimeout(()=>{state.sheetViewerQuery=els.sheetViewerSearch.value.trim();state.sheetViewerOffset=0;loadSheetViewer();},250);});els.selectVisibleButton.addEventListener('click',''')
+
+          # Viewer styling.
+          p=Path('mailmerge_app/static/app.css');text=p.read_text(encoding='utf-8');text += '''\n.sheet-viewer-dialog{width:min(94vw,1500px);height:min(88vh,900px);padding:0;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 70px #15223833;background:#fff}.sheet-viewer-dialog::backdrop{background:#121a2670;backdrop-filter:blur(2px)}.sheet-viewer-shell{height:100%;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}.sheet-viewer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 18px;border-bottom:1px solid var(--line)}.sheet-viewer-head h2{margin:0 0 3px;font-size:18px}.sheet-viewer-head p{margin:0;color:var(--muted);font-size:12px}.sheet-viewer-toolbar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#f8fafb;border-bottom:1px solid var(--line)}.sheet-viewer-toolbar input{min-width:280px;max-width:520px;flex:1;border:1px solid var(--line-strong);border-radius:9px;padding:8px 10px}.sheet-viewer-toolbar span{font-size:11.5px;color:var(--muted);white-space:nowrap}.sheet-viewer-table-wrap{overflow:auto}.sheet-viewer-table{min-width:max-content}.sheet-viewer-table th{top:0}.sheet-viewer-table td{max-width:420px}.sheet-viewer-footer{display:flex;align-items:center;justify-content:center;gap:14px;padding:10px;border-top:1px solid var(--line);background:#fafbfd;font-size:12px;color:var(--muted)}\n''';p.write_text(text,encoding='utf-8')
+
+          # Tests: sheet viewer endpoint, browser slot mismatch, and frontend wiring.
+          p=Path('tests/test_api.py');text=p.read_text(encoding='utf-8')
+          marker='''    def test_empty_selected_rows_means_no_recipients(self):\n'''
+          insert='''    def test_sheet_viewer_rows_support_search_and_paging(self):\n        upload = self.client.post("/api/imports", files={"file": ("valid.xlsx", self._valid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}).json()\n        response = self.client.get(f"/api/imports/{upload['import_id']}/rows", params={"sheet":"Contacts","limit":1,"offset":0,"q":"lin"})\n        self.assertEqual(response.status_code, 200, response.text)\n        data = response.json()\n        self.assertEqual(data["total"], 1)\n        self.assertEqual(data["rows"][0]["Email"], "lin@example.com")\n\n    def test_browser_sender_rejects_cached_slot_email_mismatch(self):\n        profile = {"browser_id":"chrome","profile_dir":"Default","gmail_accounts":[{"slot":0,"email":"actual@example.com"}]}\n        with unittest.mock.patch.object(self.main, "discover_profiles", return_value=[profile]):\n            response = self.client.put("/api/browser-senders/test", json={"id":"test","label":"Test","browser_id":"chrome","profile_dir":"Default","gmail_slot":0,"expected_email":"wrong@example.com"})\n        self.assertEqual(response.status_code, 409, response.text)\n        self.assertIn("actual@example.com", response.text)\n\n'''
+          if marker not in text: raise SystemExit('test_api marker missing')
+          text=text.replace(marker,insert+marker,1).replace('import unittest\n','import unittest\nimport unittest.mock\n',1);p.write_text(text,encoding='utf-8')
+
+          p=Path('tests/test_frontend_integrity.py');text=p.read_text(encoding='utf-8')
+          marker='''    def test_first_run_tour_is_wired_and_replayable(self):\n'''
+          insert='''    def test_sheet_viewer_and_expanded_tour_are_wired(self):\n        self.assertIn('openSheetViewerButton', self.html)\n        self.assertIn('sheetViewerDialog', self.html)\n        self.assertIn('/api/imports/${state.importId}/rows', self.js)\n        self.assertIn("title:'Set up senders carefully'", self.js)\n        self.assertIn("title:'Inspect the source'", self.js)\n        self.assertGreaterEqual(self.js.count("title:'"), 8)\n\n'''
+          if marker not in text: raise SystemExit('frontend test marker missing')
+          p.write_text(text.replace(marker,insert+marker,1),encoding='utf-8')
+          PY
+      - name: Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check mailmerge_app/static/app.js
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+          python -m compileall -q mailmerge_app
+          python -m unittest discover -s tests -v
+          git diff --check
+      - name: Commit product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add mailmerge_app/browser_profiles.py mailmerge_app/main.py mailmerge_app/static/index.html mailmerge_app/static/app.js mailmerge_app/static/app.css tests/test_api.py tests/test_frontend_integrity.py
+          git commit -m 'fix: make browser sender detection trustworthy and add sheet viewer'
+          git push origin HEAD:main
