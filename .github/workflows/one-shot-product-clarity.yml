@@ -43,19 +43,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload=.github/product-clarity.patch.gz.b64
-          actual_bytes="$(wc -c < "$payload" | tr -d ' ')"
-          actual_payload_hash="$(sha256sum "$payload" | awk '{print $1}')"
-          echo "payload bytes: $actual_bytes"
-          echo "payload sha256: $actual_payload_hash"
-          test "$actual_bytes" = "16844"
-          test "$actual_payload_hash" = "56c563456bfbb90fea60e6ff10fa82e2427ae06028a5846a3021e0f872be3412"
-          base64 -d "$payload" > /tmp/product-clarity.patch.gz
+          dir=.github/product-clarity-chunks
+          checks=(
+            '00 2800 dcef4ecb8181ef18f4d4fd0d3384477e8629836b2f93a6617b3208e0c99e5d19'
+            '01 2800 38bfc32dc664a0ff7a3108cb6d321710f3ef800eaf456ac7dc1d2ef45b76c0b9'
+            '02 2800 0f5d4b375cdda8bc9ad575ba536c5b59ea3ff181b189e37de24829634340ca2f'
+            '03 2800 d3e7c41974baffd4f3873467f1767fbf77f3d26509a2c0514a00530e6406368f'
+            '04 2800 fa38d314139fe11cf7ec29af7df67027cc1068a35b5fcb08dca7f081200bce95'
+            '05 2800 414855159b074d62ac736392a960bd89be17cd74fd695ea96120391c67591839'
+            '06 44 4fb9bfcf4f0f68f5189f7ed73d7f8803a101fe0468fab44c981695ef76ff212b'
+          )
+          for item in "${checks[@]}"; do
+            read -r name bytes hash <<< "$item"
+            actual_bytes="$(wc -c < "$dir/$name" | tr -d ' ')"
+            actual_hash="$(sha256sum "$dir/$name" | awk '{print $1}')"
+            echo "chunk $name: $actual_bytes bytes $actual_hash"
+            test "$actual_bytes" = "$bytes"
+            test "$actual_hash" = "$hash"
+          done
+          cat "$dir"/00 "$dir"/01 "$dir"/02 "$dir"/03 "$dir"/04 "$dir"/05 "$dir"/06 > /tmp/product-clarity.patch.gz.b64
+          test "$(wc -c < /tmp/product-clarity.patch.gz.b64 | tr -d ' ')" = '16844'
+          test "$(sha256sum /tmp/product-clarity.patch.gz.b64 | awk '{print $1}')" = '56c563456bfbb90fea60e6ff10fa82e2427ae06028a5846a3021e0f872be3412'
+          base64 -d /tmp/product-clarity.patch.gz.b64 > /tmp/product-clarity.patch.gz
           gzip -t /tmp/product-clarity.patch.gz
           gzip -dc /tmp/product-clarity.patch.gz > /tmp/product-clarity.patch
-          actual_patch_hash="$(sha256sum /tmp/product-clarity.patch | awk '{print $1}')"
-          echo "patch sha256: $actual_patch_hash"
-          test "$actual_patch_hash" = "ce43da29ffc38e68f9bcc62cb78f0397b1bc74551b1615e8f34a7ec1d8143ee9"
+          test "$(sha256sum /tmp/product-clarity.patch | awk '{print $1}')" = 'ce43da29ffc38e68f9bcc62cb78f0397b1bc74551b1615e8f34a7ec1d8143ee9'
           git apply --check /tmp/product-clarity.patch
           git apply /tmp/product-clarity.patch
 
