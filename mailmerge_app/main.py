@@ -161,7 +161,7 @@ class RenderRequest(BaseModel):
     filter_value: str = Field(default="", max_length=20_000)
     sort_column: str = Field(default="", max_length=255)
     sort_direction: Literal["asc", "desc"] = "asc"
-    selected_rows: list[str] = Field(default_factory=list, max_length=100_000)
+    selected_rows: list[str] | None = Field(default=None, max_length=100_000)
     row_overrides: dict[str, dict[str, str]] = Field(default_factory=dict, max_length=100_000)
     limit: int = Field(default=0, ge=0, le=100_000)
     trim_values: bool = True
@@ -210,7 +210,6 @@ class CampaignRequest(BaseModel):
     skip_duplicates: bool = True
     throttle_ms: int = Field(default=750, ge=0, le=60_000)
     scheduled_at: str = Field(default="", max_length=80)
-    reviewed: bool = False
     confirm_text: str = Field(default="", max_length=200)
 
 
@@ -255,7 +254,7 @@ async def templates_list() -> list[dict[str, Any]]:
 @app.put("/api/templates/{template_id}")
 async def templates_save(template_id: str, payload: TemplatePayload) -> dict[str, Any]:
     if payload.id != template_id:
-        raise HTTPException(400, "Template id does not match the route.")
+        raise HTTPException(400, "Template id does not match the request path.")
     _validate_attachment_ids(payload.attachment_ids)
     return store.save_template(payload.model_dump())
 
@@ -274,7 +273,7 @@ async def snippets_list() -> list[dict[str, str]]:
 @app.put("/api/snippets/{snippet_id}")
 async def snippets_save(snippet_id: str, payload: SnippetPayload) -> dict[str, str]:
     if payload.id != snippet_id:
-        raise HTTPException(400, "Snippet id does not match the route.")
+        raise HTTPException(400, "Snippet id does not match the request path.")
     return store.save_snippet(payload.model_dump())
 
 
@@ -460,7 +459,7 @@ async def render_messages(payload: RenderRequest) -> dict[str, Any]:
         raise HTTPException(400, _safe_error(exc)) from exc
     _validate_mapping_columns(payload, headers)
 
-    if payload.selected_rows:
+    if payload.selected_rows is not None:
         selected = set(payload.selected_rows)
         rows = [row for row in rows if row.get("_row") in selected]
     if payload.row_overrides:
@@ -520,7 +519,7 @@ async def browser_senders_list() -> list[dict[str, Any]]:
 @app.put("/api/browser-senders/{sender_id}")
 async def browser_sender_save(sender_id: str, payload: BrowserSenderPayload) -> dict[str, Any]:
     if payload.id and payload.id != sender_id:
-        raise HTTPException(400, "Browser sender id does not match the route.")
+        raise HTTPException(400, "Browser sender id does not match the request path.")
     if not is_valid_email(payload.expected_email):
         raise HTTPException(400, "Expected sender email is invalid.")
     profiles = await asyncio.to_thread(discover_profiles)
@@ -538,7 +537,7 @@ async def browser_sender_save(sender_id: str, payload: BrowserSenderPayload) -> 
 @app.delete("/api/browser-senders/{sender_id}")
 async def browser_sender_delete(sender_id: str) -> dict[str, bool]:
     if store.browser_sender_in_use(sender_id):
-        raise HTTPException(409, "This browser sender route is used by an active campaign. Cancel or finish that campaign first.")
+        raise HTTPException(409, "This browser sender is used by an active campaign. Cancel or finish that campaign first.")
     store.delete_browser_sender(sender_id)
     return {"deleted": True}
 
@@ -547,7 +546,7 @@ async def browser_sender_delete(sender_id: str) -> dict[str, bool]:
 async def browser_sender_verify_open(sender_id: str) -> dict[str, Any]:
     sender = store.get_browser_sender(sender_id)
     if not sender:
-        raise HTTPException(404, "Browser sender route not found.")
+        raise HTTPException(404, "Browser sender not found.")
     profile = _profile_for_sender(sender)
     launch_url(profile, inbox_url(int(sender["gmail_slot"])))
     return {"opened": True, "expected_email": sender["expected_email"], "gmail_slot": sender["gmail_slot"]}
@@ -557,7 +556,7 @@ async def browser_sender_verify_open(sender_id: str) -> dict[str, Any]:
 async def browser_sender_verify_confirm(sender_id: str) -> dict[str, Any]:
     sender = store.get_browser_sender(sender_id)
     if not sender:
-        raise HTTPException(404, "Browser sender route not found.")
+        raise HTTPException(404, "Browser sender not found.")
     store.mark_browser_sender_verified(sender_id)
     return store.get_browser_sender(sender_id) or {}
 
@@ -627,16 +626,16 @@ async def accounts_delete(email: str) -> dict[str, bool]:
 async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
     max_batch = int(store.get_setting("max_batch_size", "500") or "500")
     if len(payload.messages) > max_batch:
-        raise HTTPException(400, f"Batch has {len(payload.messages)} messages; current safety limit is {max_batch}.")
-    await asyncio.to_thread(_ensure_messages_safe, payload.messages)
+        raise HTTPException(400, f"Batch has {len(payload.messages)} messages; maximum is {max_batch}.")
+    await asyncio.to_thread(_validate_campaign_messages, payload.messages)
     expected_batch = await asyncio.to_thread(batch_fingerprint, [m.model_dump() for m in payload.messages])
     if payload.batch_id != expected_batch:
-        raise HTTPException(409, "Rendered batch changed. Review the latest batch before processing.")
+        raise HTTPException(409, "Messages changed. Check the current messages again before processing.")
 
     if payload.mode == "send":
-        expected = f"SEND {len(payload.messages)} {payload.batch_id[:8].upper()}"
-        if not payload.reviewed or payload.confirm_text.strip() != expected:
-            raise HTTPException(400, f"Sending requires review and typing exactly: {expected}")
+        expected = f"SEND {len(payload.messages)}"
+        if payload.confirm_text.strip() != expected:
+            raise HTTPException(400, f"Sending requires typing exactly: {expected}")
         if not payload.account:
             raise HTTPException(400, "Select a connected Gmail account.")
     elif payload.mode == "draft" and not payload.account:
@@ -957,12 +956,12 @@ def _mark_duplicate_recipients(messages: list[dict[str, Any]]) -> None:
             seen[key] = message["row_number"]
 
 
-def _ensure_messages_safe(messages: list[MessagePayload]) -> None:
+def _validate_campaign_messages(messages: list[MessagePayload]) -> None:
     if not messages:
         raise HTTPException(400, "There are no messages to process.")
-    unsafe = [message.row_number for message in messages if message.errors]
-    if unsafe:
-        raise HTTPException(400, "Fix validation errors before processing rows: " + ", ".join(unsafe[:12]))
+    invalid_rows = [message.row_number for message in messages if message.errors]
+    if invalid_rows:
+        raise HTTPException(400, "Fix validation errors before processing rows: " + ", ".join(invalid_rows[:12]))
     attachment_catalog = {item["id"]: item for item in store.list_attachments()}
     for message in messages:
         recipients = split_addresses(message.to)
@@ -1018,7 +1017,7 @@ def _validate_attachment_ids(ids: list[str], catalog: dict[str, dict[str, Any]] 
     if missing:
         raise HTTPException(400, "Missing or changed attachment(s): " + ", ".join(missing[:8]))
     if total > 24 * 1024 * 1024:
-        raise HTTPException(400, "Selected attachments exceed the 24 MB pre-encoding safety limit.")
+        raise HTTPException(400, "Selected attachments exceed the 24 MB pre-encoding limit.")
 
 
 def _attachment_payloads(
@@ -1309,14 +1308,14 @@ def _profile_for_sender(sender: dict[str, Any]) -> dict[str, Any]:
     profiles = discover_profiles()
     profile = next((p for p in profiles if p["browser_id"] == sender["browser_id"] and p["profile_dir"] == sender["profile_dir"]), None)
     if profile is None:
-        raise HTTPException(400, "The browser profile for this sender route is no longer available.")
+        raise HTTPException(400, "The browser profile for this sender is no longer available.")
     return profile
 
 
 def _require_fresh_browser_sender(sender_id: str) -> dict[str, Any]:
     sender = store.get_browser_sender(sender_id)
     if not sender:
-        raise HTTPException(400, "Select a saved browser sender route.")
+        raise HTTPException(400, "Select a saved browser sender.")
     verified = sender.get("verified_at") or ""
     try:
         verified_dt = datetime.fromisoformat(verified)

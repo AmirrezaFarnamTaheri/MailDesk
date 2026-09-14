@@ -1,25 +1,25 @@
 # MailDesk
 
-MailDesk is a **local-first desktop mail-merge application** for preparing reusable email templates, filling them from Excel/CSV/Google Sheets, reviewing every generated message, and then creating browser drafts, Gmail API drafts, or sending through Gmail with explicit safety gates.
+MailDesk is a **local-first desktop mail-merge application** for preparing reusable email templates, filling them from Excel/CSV/Google Sheets, reviewing every generated message, and then creating browser drafts, Gmail API drafts, or sending through Gmail.
 
-Version: **0.2.0**
+Version: **0.2.1**
 
 ## What changed in 0.2
 
 The original PowerShell workflow has been generalized into a product rather than wrapped as-is. This release addresses the full next-stage backlog:
 
-1. **Desktop productionization** — native pywebview window, first-run guide, single-instance guard, persistent UI preferences, version/about endpoint, database backups, PyInstaller + Inno Setup packaging, optional Authenticode signing.
+1. **Desktop productionization** — native pywebview window, first-run guided tour, single-instance guard, persistent UI preferences, version/about endpoint, database backups, PyInstaller + Inno Setup packaging, optional Authenticode signing.
 2. **Richer templates** — plain text + HTML, signatures, snippets, defaults (`{{Name|there}}`), conditionals (`{{#if Link}}…{{/if}}`), attachments, and Content-ID inline images.
 3. **Smarter spreadsheet handling** — Excel/CSV drag-and-drop, header detection, automatic column suggestions, recipient/name/Cc/Bcc/attachment mapping, filters, row selection, campaign-only cell edits, duplicate-recipient warnings, large-sheet guardrails.
-4. **First-class multi-account routing** — Gmail API accounts are separate from browser routes. Browser routes explicitly store **browser + browser profile + Gmail `/u/N/` slot + expected email**.
+4. **First-class multi-account support** — Gmail API accounts are separate from browser senders. Browser senders store the browser profile, account index and expected email.
 5. **Persistent send queue** — each message has a durable state and campaign ID; campaigns can be paused, resumed, cancelled, inspected, throttled, and failed items retried. Interrupted running campaigns come back **Paused**, never silently resumed.
-6. **Stronger safety** — true dry run, exact batch fingerprint, sender verification, duplicate protection, attachment validation/size limits, blocked executable attachments, configurable batch cap, and typed confirmation for real sends.
+6. **Delivery controls** — dry run, internal batch-integrity checks, sender verification, duplicate protection, attachment limits, blocked executable attachments, configurable batch cap, and typed confirmation for live sends.
 7. **Scheduling + campaign history** — campaigns may be scheduled, operation history is queryable/exportable, and a local audit ledger records every attempt and remote ID.
-8. **Five-step GUI** — Recipients → Template → Personalization → Delivery → Review & queue, with a persistent live message-review pane and per-message edits.
+8. **Five-step GUI** — Recipients → Message → Check → Delivery → Review, with a persistent message preview and per-message edits.
 9. **Google Sheets snapshots** — connect with read-only Sheets scope, load a spreadsheet by URL/ID, refresh its snapshot, then review the snapshot before processing.
-10. **Hardening/distribution** — Windows/Linux CI, Python 3.11/3.13 coverage, JavaScript syntax checks, migration backups, token/error redaction, malformed-workbook tests, RTL/Unicode tests, large-sheet tests, queue restart tests, and installer artifacts.
+10. **Validation/distribution** — Windows/Linux CI, Python 3.11/3.13 coverage, JavaScript syntax checks, migration backups, token/error redaction, malformed-workbook tests, RTL/Unicode tests, large-sheet tests, queue restart tests, and installer artifacts.
 
-## The important browser-account model
+## Browser accounts
 
 A Chromium **browser profile** and a Gmail **account slot** are different things. A single Chrome profile may have several Gmail accounts:
 
@@ -29,19 +29,19 @@ Chrome / Profile 1
 └── Gmail /u/1/ → work@example.com
 ```
 
-MailDesk therefore saves each browser sender as:
+MailDesk saves each browser sender as:
 
 ```text
 Browser:         Chrome
 Browser profile: Profile 1
-Gmail slot:      1
+Account index:   1
 Expected email:  work@example.com
 Label:           Work Gmail
 ```
 
 Browser drafts are opened using the exact slot URL, e.g. `https://mail.google.com/mail/u/1/?view=cm...`.
 
-Because Gmail slot numbers depend on the current browser account session, MailDesk **does not pretend it can permanently infer which email owns `/u/1/`**. Before browser drafts can run, the app opens the configured `/u/N/#inbox` and requires the user to confirm that the visible account is the expected email. That verification expires after 30 minutes.
+Gmail account indexes depend on the current signed-in account order. Before browser drafts run, MailDesk opens the configured account and asks you to confirm that the visible email matches the saved sender. Verification expires after 30 minutes.
 
 ## Run from source
 
@@ -89,8 +89,8 @@ For Gmail API drafts/sends and Google Sheets:
 3. Configure an OAuth consent screen.
 4. Create an OAuth Client ID of type **Desktop app**.
 5. Download its JSON.
-6. In **Accounts**, choose **Connect Google** and select the JSON.
-7. Leave “Google Sheets read-only” checked if you want live Sheet snapshots.
+6. In **Senders**, choose **Connect account** and select the JSON.
+7. Leave read-only Google Sheets access enabled if you want Sheet snapshots.
 
 Scopes used:
 
@@ -146,24 +146,23 @@ A process restart converts an interrupted `Running` campaign to `Paused`. The us
 
 ### Scheduling
 
-Scheduling is local. The machine and MailDesk must be running at the scheduled time. This is intentional: no server/cloud component is introduced just to schedule email.
+Scheduling is local. MailDesk and the machine must be running at the scheduled time.
 
-For a scheduled **browser** campaign, Gmail-route verification may have expired by execution time. In that case the campaign pauses until the route is re-verified and resumed.
+For a scheduled **browser** campaign, sender verification may expire before execution. In that case the campaign pauses until the sender is verified again and resumed.
 
 ## Real-send confirmation
 
-For `N` messages, sending requires:
+For `N` messages, live sending requires:
 
 1. zero blocking validation errors;
-2. the final-review checkbox;
-3. a connected and re-verified Gmail sender account;
-4. typing:
+2. a connected Gmail sender account;
+3. typing:
 
 ```text
-SEND N ABCD1234
+SEND N
 ```
 
-where `ABCD1234` is derived from the current batch fingerprint. If any reviewed message changes, the batch ID changes.
+MailDesk still verifies the rendered batch internally before processing it; the internal fingerprint is not exposed as a user confirmation step.
 
 ## Local data and secrets
 

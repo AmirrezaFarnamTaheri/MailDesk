@@ -140,17 +140,13 @@ class Store:
     def _backup_before_upgrade(self) -> None:
         if not self.path.exists() or self.path.stat().st_size == 0 or os.getenv("MAILMERGE_SKIP_AUTO_BACKUP") == "1":
             return
-        # Copying only the main .db file is unsafe when SQLite is in WAL mode;
-        # committed pages may still live in -wal. The SQLite backup API snapshots a
-        # consistent database including WAL content before migrations run.
+        # SQLite's backup API includes committed WAL content.
         stamp = datetime.now().strftime("%Y%m%d")
         target = backups_dir() / f"{self.path.stem}-startup-{stamp}.db"
         if not target.exists():
             temporary = target.with_suffix(target.suffix + f".{uuid.uuid4().hex}.tmp")
             try:
-                # sqlite3.Connection's context manager commits/rolls back but does
-                # not close the handle. closing() is required so Windows releases
-                # both database files before os.replace/unlink runs.
+                # Close both handles before replacing files on Windows.
                 with closing(sqlite3.connect(self.path, timeout=30)) as source, closing(sqlite3.connect(temporary)) as destination:
                     source.execute("PRAGMA busy_timeout=5000")
                     source.backup(destination)
@@ -161,9 +157,7 @@ class Store:
                     temporary.unlink(missing_ok=True)
                 except OSError:
                     pass
-                # A migration backup is a safety boundary, not a best-effort
-                # convenience. Do not mutate an existing database if its recovery
-                # snapshot cannot be created.
+                # Do not migrate an existing database without a usable backup.
                 raise RuntimeError(f"Could not create the startup database backup: {exc}") from exc
         backups = sorted(backups_dir().glob(f"{self.path.stem}-startup-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in backups[7:]:
@@ -414,23 +408,46 @@ class Store:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def _seed(self, db: sqlite3.Connection) -> None:
-        count = db.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
-        if count:
-            return
         now = _utc_now()
-        for item in [
+
+        # Retire untouched stock templates from older installs without changing
+        # anything the user has edited.
+        db.execute(
+            """DELETE FROM templates
+               WHERE id=? AND name=? AND subject=? AND body=?""",
             (
                 "interview-fa",
                 "Interview schedule (Persian)",
                 "زمان‌بندی مصاحبه تسهیلات - {{نام دانشجو}}",
                 "با سلام\n\n{{نام دانشجو}} گرامی،\n\nبه اطلاع می‌رساند مصاحبه شما در روز {{روز|تاریخ اعلام‌شده}} {{تاریخ}}، ساعت {{ساعت}}، به صورت {{شیوه}} برگزار خواهد شد.\n\nبا آرزوی موفقیت",
             ),
-            ("simple-outreach", "Simple outreach", "Hello {{Name|there}}", "Hello {{Name|there}},\n\nWrite your message here.\n\nBest regards,"),
-        ]:
+        )
+        db.execute(
+            """UPDATE templates
+               SET name=?, subject=?, body=?, updated_at=?
+               WHERE id=? AND name=? AND subject=? AND body=?""",
+            (
+                "General message",
+                "A quick note",
+                "Hello {{Name|there}},\n\nWrite your message here.\n\nBest,",
+                now,
+                "simple-outreach",
+                "Simple outreach",
+                "Hello {{Name|there}}",
+                "Hello {{Name|there}},\n\nWrite your message here.\n\nBest regards,",
+            ),
+        )
+
+        count = db.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
+        if not count:
             db.execute(
                 """INSERT INTO templates(id,name,subject,body,cc_template,bcc_template,body_html,signature_html,attachment_ids,tags,default_account,default_browser_sender_id,created_at,updated_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (item[0], item[1], item[2], item[3], "", "", "", "", "[]", "", "", "", now, now),
+                (
+                    "simple-outreach", "General message", "A quick note",
+                    "Hello {{Name|there}},\n\nWrite your message here.\n\nBest,",
+                    "", "", "", "", "[]", "", "", "", now, now,
+                ),
             )
         db.execute(
             "INSERT OR IGNORE INTO snippets(id,name,content,created_at,updated_at) VALUES(?,?,?,?,?)",

@@ -73,11 +73,25 @@ class ApiFlowTests(unittest.TestCase):
         rendered = self.client.post("/api/render", json={
             "import_id":data["import_id"],"sheet":"Contacts","to_column":"Email","name_column":"Name",
             "subject":"Hello {{Name|there}}","body":"Hi {{Name}}","body_html":"<p>Hi {{Name}}</p>","signature_html":"",
-            "cc_template":"","bcc_template":"","attachment_ids":[],"filter_column":"Status","filter_operator":"equals","filter_value":"Ready","selected_rows":[],"limit":0,"trim_values":True,
+            "cc_template":"","bcc_template":"","attachment_ids":[],"filter_column":"Status","filter_operator":"equals","filter_value":"Ready","selected_rows":None,"limit":0,"trim_values":True,
         })
         self.assertEqual(rendered.status_code, 200, rendered.text); body=rendered.json()
         self.assertEqual(body["total"],2); self.assertEqual(body["valid"],1); self.assertEqual(body["invalid"],1)
         self.assertTrue(body["batch_id"])
+
+    def test_empty_selected_rows_means_no_recipients(self):
+        upload = self.client.post(
+            "/api/imports",
+            files={"file": ("valid.xlsx", self._valid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        ).json()
+        rendered = self.client.post("/api/render", json={
+            "import_id": upload["import_id"], "sheet": "Contacts", "to_column": "Email", "name_column": "Name",
+            "subject": "Hello {{Name}}", "body": "Body", "body_html": "", "signature_html": "",
+            "cc_template": "", "bcc_template": "", "attachment_ids": [], "selected_rows": [],
+            "limit": 0, "trim_values": True,
+        })
+        self.assertEqual(rendered.status_code, 200, rendered.text)
+        self.assertEqual(rendered.json()["total"], 0)
 
     def test_malformed_xlsx_is_rejected(self):
         response = self.client.post("/api/imports", files={"file": ("broken.xlsx", b"not-a-zip", "application/octet-stream")})
@@ -86,10 +100,10 @@ class ApiFlowTests(unittest.TestCase):
     def test_dry_run_campaign_completes_in_persistent_queue(self):
         upload = self.client.post("/api/imports", files={"file": ("valid.xlsx", self._valid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}).json()
         rendered = self.client.post("/api/render", json={
-            "import_id":upload["import_id"],"sheet":"Contacts","to_column":"Email","name_column":"Name","subject":"Hello {{Name}}","body":"Body {{Name}}","body_html":"","signature_html":"","cc_template":"","bcc_template":"","attachment_ids":[],"selected_rows":[],"limit":0,"trim_values":True,
+            "import_id":upload["import_id"],"sheet":"Contacts","to_column":"Email","name_column":"Name","subject":"Hello {{Name}}","body":"Body {{Name}}","body_html":"","signature_html":"","cc_template":"","bcc_template":"","attachment_ids":[],"selected_rows":None,"limit":0,"trim_values":True,
         }).json()
         messages=[{k:v for k,v in m.items() if k!='source'} for m in rendered["messages"]]
-        created=self.client.post("/api/campaigns",json={"name":"Dry test","source_name":"valid.xlsx","mode":"dry_run","batch_id":rendered["batch_id"],"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":""})
+        created=self.client.post("/api/campaigns",json={"name":"Dry test","source_name":"valid.xlsx","mode":"dry_run","batch_id":rendered["batch_id"],"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","confirm_text":""})
         self.assertEqual(created.status_code,200,created.text); cid=created.json()["id"]
         campaign = self._wait_terminal(cid)
         self.assertEqual(campaign["status"],"Completed"); self.assertEqual(campaign["success"],2)
@@ -103,15 +117,15 @@ class ApiFlowTests(unittest.TestCase):
     def test_send_requires_exact_batch_confirmation_before_account_lookup(self):
         messages=[self._message()]
         batch_id=self._batch_id(messages)
-        response=self.client.post('/api/campaigns',json={"name":"Send","mode":"send","account":"missing@example.com","batch_id":batch_id,"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","reviewed":False,"confirm_text":""})
-        self.assertEqual(response.status_code,400); self.assertIn(f"SEND 1 {batch_id[:8].upper()}",response.json()["detail"])
+        response=self.client.post('/api/campaigns',json={"name":"Send","mode":"send","account":"missing@example.com","batch_id":batch_id,"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","confirm_text":""})
+        self.assertEqual(response.status_code,400); self.assertIn("SEND 1",response.json()["detail"])
 
     def test_campaign_api_rejects_blank_recipient_even_if_client_claims_no_errors(self):
         messages = [self._message("")]
         batch_id = self._batch_id(messages)
         response = self.client.post("/api/campaigns", json={
             "name":"Invalid","mode":"dry_run","batch_id":batch_id,"messages":messages,
-            "skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+            "skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","confirm_text":"",
         })
         self.assertEqual(response.status_code, 400, response.text)
         self.assertIn("Recipient is blank", response.json()["detail"])
@@ -122,7 +136,7 @@ class ApiFlowTests(unittest.TestCase):
         batch_id = self._batch_id([message])
         response = self.client.post("/api/campaigns", json={
             "name":"Header safety","mode":"dry_run","batch_id":batch_id,"messages":[message],
-            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","confirm_text":"",
         })
         self.assertEqual(response.status_code, 400, response.text)
         self.assertIn("Subject contains a line break", response.json()["detail"])
@@ -134,10 +148,10 @@ class ApiFlowTests(unittest.TestCase):
             messages = [self._message("") for _ in range(3)]
             response = self.client.post("/api/campaigns", json={
                 "name":"Too large","mode":"dry_run","batch_id":"0123456789abcdef","messages":messages,
-                "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+                "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","confirm_text":"",
             })
             self.assertEqual(response.status_code, 400, response.text)
-            self.assertIn("current safety limit is 2", response.json()["detail"])
+            self.assertIn("maximum is 2", response.json()["detail"])
             self.assertNotIn("Recipient is blank", response.json()["detail"])
         finally:
             self.client.put("/api/settings", json=previous)
@@ -148,7 +162,7 @@ class ApiFlowTests(unittest.TestCase):
         scheduled_at = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
         response = self.client.post("/api/campaigns", json={
             "name":"Too soon","mode":"dry_run","batch_id":batch_id,"messages":messages,
-            "skip_duplicates":True,"throttle_ms":0,"scheduled_at":scheduled_at,"reviewed":True,"confirm_text":"",
+            "skip_duplicates":True,"throttle_ms":0,"scheduled_at":scheduled_at,"confirm_text":"",
         })
         self.assertEqual(response.status_code, 400, response.text)
         self.assertIn("at least 5 seconds", response.json()["detail"])
@@ -158,7 +172,7 @@ class ApiFlowTests(unittest.TestCase):
         batch_id = self._batch_id(messages)
         created = self.client.post("/api/campaigns", json={
             "name":"Terminal","mode":"dry_run","batch_id":batch_id,"messages":messages,
-            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","confirm_text":"",
         })
         self.assertEqual(created.status_code, 200, created.text)
         cid = created.json()["id"]
@@ -225,7 +239,7 @@ class ApiFlowTests(unittest.TestCase):
         batch_id = self._batch_id([message])
         queued = self.client.post("/api/campaigns", json={
             "name":"Changed attachment","mode":"dry_run","batch_id":batch_id,"messages":[message],
-            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","reviewed":True,"confirm_text":"",
+            "skip_duplicates":False,"throttle_ms":0,"scheduled_at":"","confirm_text":"",
         })
         self.assertEqual(queued.status_code, 400, queued.text)
         self.assertIn("changed attachment", queued.json()["detail"].lower())

@@ -1,47 +1,51 @@
 # User Guide
 
+On a fresh install, MailDesk opens a short guided tour. You can replay it any time with **Quick tour** in the sidebar.
+
 ## 1. Recipients
 
-Choose Excel/CSV or connect a Google account and load a Google Sheet. Confirm the detected worksheet/header row, then review suggested field mappings.
+Load an Excel/CSV file or a Google Sheet. Confirm the worksheet, header row and recipient-email column. MailDesk suggests common mappings automatically.
 
-The preview supports row selection and campaign-only cell edits. Edits do not modify the original file.
+Use **More recipient options** only when you need Cc/Bcc columns, filtering, sorting or a row limit. You can select rows and make campaign-only cell edits without changing the original spreadsheet.
 
-## 2. Template
+## 2. Message
 
-Choose or create a reusable template. Use placeholders, defaults and conditionals. Optional HTML, signature, snippets, attachments and inline images can be added here.
+Start with the built-in **General message** template or create your own. Use placeholders such as `{{Name|there}}`, optional conditions, snippets, HTML, signatures and attachments as needed.
 
-## 3. Personalization
+## 3. Check
 
-Map optional Cc/Bcc/attachment columns, add Cc/Bcc templates, then render. Blocking errors must be fixed before a campaign can enter the queue.
+Choose **Check messages** to generate the personalized result for every selected row. Fix blocking errors before continuing.
 
-Click a validation row or use the live-review arrows to inspect generated mail. To make a one-off correction, edit the current message in the review pane; the batch ID is recomputed.
+Use the preview on the right or open a validation row to inspect individual messages. One-off edits can be made directly in the preview before the campaign is queued.
 
 ## 4. Delivery
 
-Choose:
+Choose one delivery mode:
 
-- **Dry run** — queue execution with zero external side effects.
-- **Browser drafts** — exact browser profile + verified Gmail `/u/N/` route.
-- **Gmail drafts** — API-created drafts.
-- **Send** — API send with typed confirmation.
+- **Dry run** — build and validate the queue without sending.
+- **Browser compose** — open reviewed drafts in a configured browser sender.
+- **Gmail drafts** — create drafts through a connected Gmail account.
+- **Send email** — send through a connected Gmail account.
 
-Set pacing, an optional schedule, and duplicate protection.
+Campaign name, schedule, pacing and duplicate handling are optional.
 
-## 5. Review & queue
+## 5. Review
 
-Confirm message count, sender/route, timing and batch ID. Check the review box. Real sends also require exact typed confirmation.
+Confirm the message count, delivery mode, sender and timing. Live sending requires one typed confirmation: `SEND N`, where `N` is the number of messages.
 
 ## Queue
 
-Use Queue to inspect progress, pause/resume, retry failed messages, cancel work, or expand a campaign to see every row.
+Use **Queue** to inspect progress, pause or resume work, retry failed messages, cancel a campaign, and inspect row-level results.
 
-## Browser routes
+If Gmail returns an uncertain result during a draft or send operation, MailDesk pauses the affected item instead of guessing. Check Gmail, then mark the item as completed or not completed before resuming.
 
-Open Accounts → Browser sender routes. Create one entry for each Gmail account path in each browser profile. For example:
+## Browser senders
+
+Open **Senders → Browser senders** and add the browser profile, account index and expected email you want to use.
 
 ```text
-Chrome · Profile 1 · slot 0 · personal@example.com
-Chrome · Profile 1 · slot 1 · work@example.com
+Chrome · Profile 1 · account 0 · personal@example.com
+Chrome · Profile 1 · account 1 · work@example.com
 ```
 
-Use **Verify** before browser processing. Never assume `/u/1/` is permanently tied to the same account after sign-in order changes.
+Use **Verify** before browser processing. The account index follows Gmail's signed-in account order, so verify again if that order changes or the verification expires.

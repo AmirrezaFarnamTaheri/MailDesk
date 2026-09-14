@@ -151,7 +151,7 @@ def launch_url(profile: dict[str, object], url: str) -> None:
     executable = str(profile["executable"])
     profile_dir = str(profile["profile_dir"])
     if not url.startswith("https://mail.google.com/mail/u/"):
-        raise ValueError("Browser sender routes may only open Gmail URLs.")
+        raise ValueError("Browser senders may only open Gmail URLs.")
     subprocess.Popen(
         [executable, f"--profile-directory={profile_dir}", url],
         stdout=subprocess.DEVNULL,

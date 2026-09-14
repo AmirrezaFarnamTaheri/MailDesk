@@ -223,6 +223,10 @@ class StoreTests(unittest.TestCase):
             old = os.environ.get("MAILMERGE_DATA_DIR"); os.environ["MAILMERGE_DATA_DIR"] = td
             try:
                 path = Path(td) / "test.db"; store = Store(path)
+                templates = store.list_templates()
+                self.assertEqual([item["name"] for item in templates], ["General message"])
+                self.assertEqual(templates[0]["subject"], "A quick note")
+                self.assertNotIn("Interview schedule (Persian)", [item["name"] for item in templates])
                 saved = store.save_template({"id":"test","name":"Test","subject":"Hi {{Name}}","body":"Body","body_html":"<b>Body</b>","signature_html":"","cc_template":"","bcc_template":"","attachment_ids":[],"tags":"test","default_account":"","default_browser_sender_id":""})
                 self.assertEqual(saved["body_html"], "<b>Body</b>")
                 route = store.save_browser_sender({"id":"route","label":"Work","browser_id":"chrome","profile_dir":"Default","gmail_slot":1,"expected_email":"work@example.com"})

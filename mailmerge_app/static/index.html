@@ -12,40 +12,39 @@
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
-        <div><div class="brand-name">MailDesk</div><div class="brand-subtitle">Personalized email, safely</div></div>
+        <div><div class="brand-name">MailDesk</div><div class="brand-subtitle">Spreadsheet mail merge</div></div>
       </div>
       <nav class="nav" aria-label="Primary">
-        <button type="button" class="nav-item is-active" data-view="campaign"><span class="nav-icon">✦</span><span>Compose</span></button>
+        <button type="button" class="nav-item is-active" data-view="campaign"><span class="nav-icon">✉</span><span>Compose</span></button>
         <button type="button" class="nav-item" data-view="queue"><span class="nav-icon">≋</span><span>Queue</span><span class="nav-badge" id="queueBadge">0</span></button>
         <button type="button" class="nav-item" data-view="accounts"><span class="nav-icon">◎</span><span>Senders</span></button>
         <button type="button" class="nav-item" data-view="history"><span class="nav-icon">↺</span><span>History</span></button>
       </nav>
       <div class="sidebar-foot">
-        <div class="security-note"><span class="status-dot"></span><div><strong>Private by default</strong><br><span>Data stays on this device.</span></div></div>
+        <button type="button" class="sidebar-link" id="startTourButton">Quick tour</button>
         <div class="version" id="versionLabel">v—</div>
       </div>
     </aside>
 
     <main class="main">
       <header class="topbar">
-        <div><h1 id="viewTitle">Compose campaign</h1><p id="viewSubtitle">Add recipients, write the message, check every row, then choose how to deliver it.</p></div>
-        <div class="topbar-actions"><button type="button" class="button secondary" id="refreshButton" title="Refresh app health, senders and the current source">Refresh data</button><div class="health-chip" id="healthChip" role="status"><span class="status-dot"></span> App ready</div></div>
+        <div><h1 id="viewTitle">Compose campaign</h1><p id="viewSubtitle">Add recipients, write the message, check it, then choose how to deliver it.</p></div>
       </header>
 
       <section class="view is-visible" id="campaignView">
         <div class="workflow-strip" role="tablist" aria-label="Campaign steps">
-          <button type="button" class="workflow-step is-active" data-step="1"><span>1</span><b>Recipients</b><small>Choose audience</small></button>
-          <button type="button" class="workflow-step" data-step="2"><span>2</span><b>Message</b><small>Write content</small></button>
-          <button type="button" class="workflow-step" data-step="3"><span>3</span><b>Check</b><small>Personalize & validate</small></button>
-          <button type="button" class="workflow-step" data-step="4"><span>4</span><b>Delivery</b><small>Choose sender</small></button>
-          <button type="button" class="workflow-step" data-step="5"><span>5</span><b>Review</b><small>Approve batch</small></button>
+          <button type="button" class="workflow-step is-active" data-step="1"><span>1</span><b>Recipients</b></button>
+          <button type="button" class="workflow-step" data-step="2"><span>2</span><b>Message</b></button>
+          <button type="button" class="workflow-step" data-step="3"><span>3</span><b>Check</b></button>
+          <button type="button" class="workflow-step" data-step="4"><span>4</span><b>Delivery</b></button>
+          <button type="button" class="workflow-step" data-step="5"><span>5</span><b>Review</b></button>
         </div>
 
         <div class="campaign-grid">
           <div class="workflow-main">
             <section class="step-pane is-visible" data-step-pane="1">
               <div class="panel">
-                <div class="panel-head"><div><h2>Recipients</h2><p>Choose who should receive this campaign. MailDesk suggests common email and name columns after loading.</p></div><div class="panel-state" id="sourceState">Not loaded</div></div>
+                <div class="panel-head"><div><h2>Recipients</h2><p>Load a spreadsheet and choose the recipient column.</p></div><div class="panel-state" id="sourceState">Not loaded</div></div>
                 <div class="panel-body">
                   <div class="source-tabs">
                     <button class="source-tab is-active" data-source-tab="file">Local file</button>
@@ -62,19 +61,19 @@
                     <div class="button-row"><button class="button primary" id="loadGoogleSheetButton">Load snapshot</button><button class="button secondary is-hidden" id="refreshGoogleSheetButton">Refresh snapshot</button><span class="hint" id="snapshotHint"></span></div>
                   </div>
 
-                  <div class="field-grid three compact-top">
+                  <div class="field-grid two compact-top">
                     <label class="field"><span>Worksheet</span><select id="sheetSelect" disabled></select></label>
                     <label class="field"><span>Header row</span><input id="headerRow" type="number" min="1" placeholder="Auto" disabled></label>
                     <label class="field"><span>Recipient email</span><select id="toColumn" disabled></select></label>
-                  </div>
-                  <div class="field-grid three">
-                    <label class="field"><span>Name / label <em>optional</em></span><select id="nameColumn" disabled></select></label>
-                    <label class="field"><span>Cc column <em>optional</em></span><select id="ccColumn" disabled></select></label>
-                    <label class="field"><span>Bcc column <em>optional</em></span><select id="bccColumn" disabled></select></label>
+                    <label class="field"><span>Name <em>optional</em></span><select id="nameColumn" disabled></select></label>
                   </div>
                   <div class="mapping-callout" id="mappingCallout">Load a source to get automatic column suggestions.</div>
                   <details class="advanced">
-                    <summary>Optional: filter, sort or limit recipients</summary>
+                    <summary>More recipient options</summary>
+                    <div class="field-grid two">
+                      <label class="field"><span>Cc column <em>optional</em></span><select id="ccColumn" disabled></select></label>
+                      <label class="field"><span>Bcc column <em>optional</em></span><select id="bccColumn" disabled></select></label>
+                    </div>
                     <div class="field-grid four">
                       <label class="field"><span>Filter column</span><select id="filterColumn" disabled><option value="">No filter</option></select></label>
                       <label class="field"><span>Rule</span><select id="filterOperator"><option value="equals">Equals</option><option value="contains">Contains</option><option value="not_empty">Is not empty</option></select></label>
@@ -97,14 +96,13 @@
 
             <section class="step-pane" data-step-pane="2">
               <div class="panel">
-                <div class="panel-head"><div><h2>Message</h2><p>Write the email once, then use spreadsheet columns as placeholders for each recipient.</p></div><div class="panel-actions"><button class="button ghost small" id="newTemplateButton">New</button><button class="button secondary small" id="saveTemplateButton">Save</button></div></div>
+                <div class="panel-head"><div><h2>Message</h2><p>Write once and insert spreadsheet columns where you want personalization.</p></div><div class="panel-actions"><button class="button ghost small" id="newTemplateButton">New</button><button class="button secondary small" id="saveTemplateButton">Save template</button></div></div>
                 <div class="panel-body">
-                  <div class="field-grid three">
-                    <label class="field"><span>Saved template</span><select id="templateSelect"></select></label>
-                    <label class="field"><span>Template name</span><input id="templateName" type="text" maxlength="120"></label>
-                    <label class="field"><span>Tags</span><input id="templateTags" type="text" placeholder="hiring, follow-up"></label>
+                  <div class="field-grid two template-fields">
+                    <label class="field"><span>Template</span><select id="templateSelect"></select></label>
+                    <label class="field"><span>Name</span><input id="templateName" type="text" maxlength="120"></label>
                   </div>
-                  <label class="field"><span>Subject</span><input id="subjectTemplate" type="text" maxlength="998" placeholder="Hello {{Name|there}}"></label>
+                  <label class="field"><span>Subject</span><input id="subjectTemplate" type="text" maxlength="998" placeholder="A quick note"></label>
                   <div class="editor-tabs"><button class="editor-tab is-active" data-editor="plain">Plain text</button><button class="editor-tab" data-editor="html">Rich HTML</button></div>
                   <div class="editor-pane is-visible" id="plainEditorPane"><label class="field"><span>Message</span><textarea id="bodyTemplate" rows="13" placeholder="Hello {{Name|there}},&#10;&#10;Write your message here."></textarea></label></div>
                   <div class="editor-pane" id="htmlEditorPane">
@@ -124,7 +122,7 @@
 
             <section class="step-pane" data-step-pane="3">
               <div class="panel">
-                <div class="panel-head"><div><h2>Check personalized messages</h2><p>Generate the exact messages MailDesk will use and fix row-level errors before delivery.</p></div><button type="button" class="button primary" id="renderButton">Check messages</button></div>
+                <div class="panel-head"><div><h2>Check messages</h2><p>Preview the personalized result and fix any row-level errors.</p></div><button type="button" class="button primary" id="renderButton">Check messages</button></div>
                 <div class="panel-body">
                   <details class="advanced compact-advanced">
                     <summary>Optional: Cc, Bcc and per-row attachments</summary>
@@ -142,21 +140,20 @@
 
             <section class="step-pane" data-step-pane="4">
               <div class="panel">
-                <div class="panel-head"><div><h2>Delivery</h2><p>Choose what MailDesk should do with the reviewed messages. Dry run remains the safest default.</p></div></div>
+                <div class="panel-head"><div><h2>Delivery</h2><p>Choose what to do with the checked messages.</p></div></div>
                 <div class="panel-body">
                   <div class="mode-grid" role="radiogroup" aria-label="Delivery mode">
-                    <label class="mode-card is-selected"><input type="radio" name="mode" value="dry_run" checked><span class="mode-icon">◇</span><span><strong>Dry run</strong><small>Validate the queue locally. No email or browser action happens.</small></span><span class="mode-tag">Safest</span></label>
-                    <label class="mode-card"><input type="radio" name="mode" value="browser"><span class="mode-icon">◫</span><span><strong>Browser compose</strong><small>Open reviewed drafts in the verified Gmail account you choose.</small></span></label>
-                    <label class="mode-card"><input type="radio" name="mode" value="draft"><span class="mode-icon">□</span><span><strong>Gmail drafts</strong><small>Create reviewable drafts through the connected Gmail account.</small></span></label>
-                    <label class="mode-card danger-mode"><input type="radio" name="mode" value="send"><span class="mode-icon">➤</span><span><strong>Send email</strong><small>Send the reviewed batch through the connected Gmail account.</small></span></label>
+                    <label class="mode-card is-selected"><input type="radio" name="mode" value="dry_run" checked><span class="mode-icon">◇</span><span><strong>Dry run</strong><small>Build and validate the queue without sending.</small></span></label>
+                    <label class="mode-card"><input type="radio" name="mode" value="browser"><span class="mode-icon">◫</span><span><strong>Browser compose</strong><small>Open Gmail compose windows in a browser profile.</small></span></label>
+                    <label class="mode-card"><input type="radio" name="mode" value="draft"><span class="mode-icon">□</span><span><strong>Gmail drafts</strong><small>Create drafts in a connected Gmail account.</small></span></label>
+                    <label class="mode-card danger-mode"><input type="radio" name="mode" value="send"><span class="mode-icon">➤</span><span><strong>Send email</strong><small>Send through a connected Gmail account.</small></span></label>
                   </div>
                   <div id="browserDelivery" class="delivery-options is-hidden">
-                    <label class="field"><span>Verified browser sender route</span><select id="browserSender"></select></label>
-                    <div class="sender-card" id="browserSenderSummary"><div class="sender-avatar">B</div><div><strong>No route selected</strong><span>Configure Chrome/Edge/Brave profile + Gmail /u/N/ slot under Accounts.</span></div><button class="button secondary small" id="verifySelectedBrowserButton">Verify</button></div>
+                    <label class="field"><span>Browser sender</span><select id="browserSender"></select></label>
+                    <div class="sender-card" id="browserSenderSummary"><div class="sender-avatar">B</div><div><strong>No sender selected</strong><span>Add a browser sender under Senders.</span></div><button class="button secondary small" id="verifySelectedBrowserButton">Verify</button></div>
                   </div>
                   <div id="gmailDelivery" class="delivery-options is-hidden">
-                    <label class="field"><span>Connected Gmail sender</span><select id="gmailAccount"></select></label>
-                    <p class="callout neutral">The credential is refreshed and the actual Gmail profile email is re-verified immediately before processing.</p>
+                    <label class="field"><span>Gmail account</span><select id="gmailAccount"></select></label>
                   </div>
                   <div class="field-grid two compact-top">
                     <label class="field"><span>Campaign name</span><input id="campaignName" type="text" placeholder="September outreach"></label>
@@ -166,7 +163,7 @@
                     <summary>Optional: pacing and duplicate handling</summary>
                     <div class="field-grid two">
                       <label class="field"><span>Delay between messages</span><div class="input-suffix"><input id="throttleMs" type="number" min="0" max="60000" value="750"><span>ms</span></div></label>
-                      <div class="check-stack"><label class="check-row"><input id="skipDuplicates" type="checkbox" checked><span>Skip messages with the same successful fingerprint in history</span></label><label class="check-row"><input id="refreshBeforeReview" type="checkbox"><span>For Google Sheets, remind me to refresh the snapshot before final review</span></label></div>
+                      <div class="check-stack"><label class="check-row"><input id="skipDuplicates" type="checkbox" checked><span>Skip exact duplicates already completed successfully</span></label></div>
                     </div>
                   </details>
                 </div>
@@ -175,15 +172,12 @@
 
             <section class="step-pane" data-step-pane="5">
               <div class="panel final-panel">
-                <div class="panel-head"><div><h2>Review & approve</h2><p>Confirm the exact batch, sender and timing. Direct sending requires one extra typed confirmation.</p></div><div class="batch-chip" id="batchChip">No batch</div></div>
+                <div class="panel-head"><div><h2>Review</h2><p>Check the message count, delivery method, sender and timing.</p></div></div>
                 <div class="panel-body">
                   <div class="final-summary" id="finalSummary"></div>
-                  <div class="safety-gate">
-                    <label class="check-row strong"><input id="reviewedCheck" type="checkbox"><span>I reviewed the generated recipients, subjects, content, warnings and sender route.</span></label>
-                    <div id="sendConfirmation" class="is-hidden"><label class="field"><span>Type the exact confirmation shown below</span><input id="confirmText" type="text" autocomplete="off"><code id="expectedConfirm"></code></label></div>
-                  </div>
+                  <div id="sendConfirmation" class="send-confirmation is-hidden"><label class="field"><span>To send now, type the confirmation below</span><input id="confirmText" type="text" autocomplete="off"><code id="expectedConfirm"></code></label></div>
                   <div class="final-actions"><button class="button secondary" id="exportReviewButton">Export review CSV</button><button class="button primary large" id="queueCampaignButton" disabled>Queue campaign</button></div>
-                  <p class="hint">Queued work can be paused, resumed, cancelled, retried and inspected under Queue. A restart pauses interrupted work rather than silently continuing it.</p>
+
                 </div>
               </div>
             </section>
@@ -192,13 +186,9 @@
           </div>
 
           <aside class="review-rail">
-            <div class="readiness-card">
-              <div class="readiness-head"><div><span class="eyebrow">Campaign readiness</span><strong>What still needs attention</strong></div></div>
-              <div id="campaignReadiness" class="readiness-list" aria-live="polite"></div>
-            </div>
             <div class="review-card">
               <div class="review-head"><div><span class="eyebrow">Message preview</span><strong id="reviewPosition">No checked messages</strong></div><div class="review-nav"><button id="prevMessage" aria-label="Previous message">‹</button><button id="nextMessage" aria-label="Next message">›</button></div></div>
-              <div id="reviewEmpty" class="review-empty"><div class="review-empty-icon">✦</div><h3>Preview each personalized message</h3><p>Add recipients, write the message, then choose <strong>Check messages</strong> to inspect every row here.</p></div>
+              <div id="reviewEmpty" class="review-empty"><div class="review-empty-icon">✉</div><h3>Message preview</h3><p>Checked messages appear here so you can move through them row by row.</p></div>
               <div id="reviewContent" class="review-content is-hidden">
                 <div class="review-status" id="reviewStatus"></div>
                 <label class="review-field"><span>To</span><input id="reviewTo" type="text"></label>
@@ -214,48 +204,55 @@
       </section>
 
       <section class="view" id="queueView">
-        <div class="section-heading"><div><h2>Campaign queue</h2><p>Track work in progress, review uncertain outcomes, or retry only what needs attention.</p></div><button type="button" class="button secondary" id="refreshQueueButton">Refresh queue</button></div>
+        <div class="section-heading"><div><h2>Campaign queue</h2><p>Track queued, running and completed campaigns.</p></div><button type="button" class="button secondary" id="refreshQueueButton">Refresh</button></div>
         <div id="queueList" class="queue-list"></div>
       </section>
 
       <section class="view" id="accountsView">
         <div class="accounts-layout">
           <section class="panel">
-            <div class="panel-head"><div><h2>Google senders</h2><p>Connect Gmail for drafts/sending and optionally allow read-only Google Sheets access.</p></div><label class="button primary" for="oauthFile">Connect Google account<input id="oauthFile" type="file" accept="application/json,.json" hidden></label></div>
-            <div class="panel-body"><label class="check-row"><input id="includeSheetsScope" type="checkbox" checked><span>Also request Google Sheets read-only permission</span></label><div id="accountList" class="account-list"></div></div>
+            <div class="panel-head"><div><h2>Gmail accounts</h2><p>Connect Gmail for drafts and sending. Google Sheets access is optional.</p></div><label class="button primary" for="oauthFile">Connect account<input id="oauthFile" type="file" accept="application/json,.json" hidden></label></div>
+            <div class="panel-body"><label class="check-row"><input id="includeSheetsScope" type="checkbox" checked><span>Also allow read-only Google Sheets access</span></label><div id="accountList" class="account-list"></div></div>
           </section>
           <section class="panel">
-            <div class="panel-head"><div><h2>Browser compose routes</h2><p>Use a browser route when you want MailDesk to open Gmail compose windows instead of using the Gmail API.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add route</button></div>
+            <div class="panel-head"><div><h2>Browser senders</h2><p>Open Gmail compose windows in an existing browser profile.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add sender</button></div>
             <div class="panel-body">
               <div class="browser-route-form" id="browserRouteForm">
                 <input id="browserSenderId" type="hidden">
-                <div class="field-grid four"><label class="field"><span>Label</span><input id="browserSenderLabel" placeholder="Work Gmail"></label><label class="field"><span>Browser profile</span><select id="browserProfile"></select></label><label class="field"><span>Gmail slot</span><input id="gmailSlot" type="number" min="0" max="99" value="0"></label><label class="field"><span>Expected email</span><input id="browserExpectedEmail" type="email" list="profileEmails" placeholder="work@example.com"><datalist id="profileEmails"></datalist></label></div>
-                <div class="button-row"><button class="button primary" id="saveBrowserSenderButton">Save route</button><span class="hint">Example: slot 0 → <code>/mail/u/0/</code>, slot 1 → <code>/mail/u/1/</code>.</span></div>
+                <div class="field-grid four"><label class="field"><span>Label</span><input id="browserSenderLabel" placeholder="Work Gmail"></label><label class="field"><span>Browser profile</span><select id="browserProfile"></select></label><label class="field"><span>Account index</span><input id="gmailSlot" type="number" min="0" max="99" value="0"></label><label class="field"><span>Expected email</span><input id="browserExpectedEmail" type="email" list="profileEmails" placeholder="work@example.com"><datalist id="profileEmails"></datalist></label></div>
+                <div class="button-row"><button class="button primary" id="saveBrowserSenderButton">Save sender</button><span class="hint">0 is the first signed-in Gmail account in that browser profile, 1 is the second.</span></div>
               </div>
               <div id="browserSenderList" class="browser-sender-list"></div>
             </div>
           </section>
           <section class="panel">
-            <div class="panel-head"><div><h2>App settings</h2><p>Set conservative batch limits, default pacing and local backup behavior.</p></div></div>
+            <div class="panel-head"><div><h2>App settings</h2><p>Set batch size, default pacing and create a local backup.</p></div></div>
             <div class="panel-body"><div class="field-grid two"><label class="field"><span>Maximum messages per campaign</span><input id="maxBatchSize" type="number" min="1" max="10000"></label><label class="field"><span>Default delay between messages (ms)</span><input id="defaultThrottle" type="number" min="0" max="60000"></label></div><div class="button-row"><button class="button secondary" id="saveSettingsButton">Save settings</button><button class="button ghost" id="backupButton">Create database backup</button></div></div>
           </section>
         </div>
       </section>
 
       <section class="view" id="historyView">
-        <div class="section-heading"><div><h2>Activity history</h2><p>Audit every draft, send, browser compose and dry run with its exact result.</p></div><div class="button-row"><a class="button secondary" href="/api/history.csv" target="_blank">Export CSV</a><button class="button secondary" id="refreshHistoryButton">Refresh</button></div></div>
+        <div class="section-heading"><div><h2>Activity history</h2><p>See the result of each draft, send, browser compose and dry run.</p></div><div class="button-row"><a class="button secondary" href="/api/history.csv" target="_blank">Export CSV</a><button class="button secondary" id="refreshHistoryButton">Refresh</button></div></div>
         <div class="table-scroll history-scroll"><table class="data-table" id="historyTable"></table></div>
       </section>
     </main>
   </div>
 
-  <dialog id="firstRunDialog" class="modal"><form method="dialog"><div class="modal-mark">✦</div><h2>Send personalized email without losing control</h2><p>MailDesk keeps templates, attachments, history and encrypted account tokens on this device. You can start with a dry run before connecting any sender.</p><div class="onboarding-list"><div><b>1</b><span>Add recipients from Excel, CSV or a reviewable Google Sheet snapshot.</span></div><div><b>2</b><span>Write one message and personalize it with spreadsheet columns.</span></div><div><b>3</b><span>Check every generated row, then choose dry run, drafts or send.</span></div></div><button class="button primary large" id="finishOnboardingButton">Create my first campaign</button></form></dialog>
+  <div id="tourOverlay" class="tour-overlay is-hidden" aria-hidden="true">
+    <div id="tourSpotlight" class="tour-spotlight"></div>
+    <section id="tourCard" class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+      <div class="tour-top"><span id="tourStepLabel">1 of 4</span><button type="button" class="tour-skip" id="skipTourButton">Skip</button></div>
+      <h2 id="tourTitle">A quick tour</h2>
+      <p id="tourText"></p>
+      <div class="tour-actions"><button type="button" class="button secondary" id="tourBackButton">Back</button><button type="button" class="button primary" id="tourNextButton">Next</button></div>
+    </section>
+  </div>
   <dialog id="snippetDialog" class="modal"><form method="dialog"><h2>Reusable snippet</h2><label class="field"><span>Name</span><input id="snippetName"></label><label class="field"><span>Content</span><textarea id="snippetContent" rows="7"></textarea></label><div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" id="saveSnippetDialogButton" value="default">Save snippet</button></div></form></dialog>
-  <dialog id="verifyBrowserDialog" class="modal"><form method="dialog"><h2>Verify Gmail sender route</h2><p id="verifyBrowserText"></p><div class="callout warning">The browser will open the configured Gmail inbox. Confirm that the visible account is exactly the expected email before marking it verified.</div><div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" id="confirmBrowserVerifiedButton" value="default">Yes, this is the expected account</button></div></form></dialog>
+  <dialog id="verifyBrowserDialog" class="modal"><form method="dialog"><h2>Verify browser sender</h2><p id="verifyBrowserText"></p><div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" id="confirmBrowserVerifiedButton" value="default">Confirm account</button></div></form></dialog>
 
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
   <div id="busyOverlay" class="busy-overlay is-hidden"><div class="spinner"></div><strong id="busyTitle">Working…</strong><span id="busyDetail"></span></div>
   <script src="/static/app.js" defer></script>
-  <script src="/static/safety.js" defer></script>
 </body>
 </html>
