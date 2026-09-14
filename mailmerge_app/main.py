@@ -451,6 +451,40 @@ async def import_preview(import_id: str, sheet: str = Query(...), header_row: in
     }
 
 
+@app.get("/api/imports/{import_id}/rows")
+async def import_rows(
+    import_id: str,
+    sheet: str = Query(...),
+    header_row: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    q: str = Query(default="", max_length=200),
+) -> dict[str, Any]:
+    path = _import_path(import_id)
+    try:
+        headers, rows, detected = await asyncio.to_thread(table, path, sheet, header_row)
+    except Exception as exc:
+        raise HTTPException(400, _safe_error(exc)) from exc
+    query = q.strip().casefold()
+    if query:
+        rows = [
+            row for row in rows
+            if query in str(row.get("_row", "")).casefold()
+            or any(query in str(row.get(header, "")).casefold() for header in headers)
+        ]
+    total = len(rows)
+    page = rows[offset: offset + limit]
+    return {
+        "headers": headers,
+        "header_row": detected,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "rows": page,
+        "source": _public_import(_import_meta(import_id)),
+    }
+
+
 @app.post("/api/render")
 async def render_messages(payload: RenderRequest) -> dict[str, Any]:
     path = _import_path(payload.import_id)
@@ -523,10 +557,18 @@ async def browser_sender_save(sender_id: str, payload: BrowserSenderPayload) -> 
         raise HTTPException(400, "Browser sender id does not match the request path.")
     if not is_valid_email(payload.expected_email):
         raise HTTPException(400, "Expected sender email is invalid.")
-    profiles = await asyncio.to_thread(discover_profiles)
+    profiles = await asyncio.to_thread(discover_profiles, force_refresh=True)
     selected = next((p for p in profiles if p["browser_id"] == payload.browser_id and p["profile_dir"] == payload.profile_dir), None)
     if selected is None:
         raise HTTPException(400, "The selected browser profile is not currently available.")
+    detected_accounts = selected.get("gmail_accounts") if isinstance(selected, dict) else []
+    if isinstance(detected_accounts, list) and detected_accounts:
+        detected = next((a for a in detected_accounts if int(a.get("slot", -1)) == payload.gmail_slot), None)
+        if detected is None:
+            raise HTTPException(409, f"The browser cache has no Gmail account at index {payload.gmail_slot}. Rescan and choose a detected account.")
+        detected_email = str(detected.get("email") or "")
+        if detected_email.casefold() != payload.expected_email.strip().casefold():
+            raise HTTPException(409, f"Browser account {payload.gmail_slot} is currently cached as {detected_email}, not {payload.expected_email}. Rescan or choose the matching account.")
     existing = store.get_browser_sender(sender_id)
     item = payload.model_dump()
     item["id"] = sender_id
@@ -548,9 +590,29 @@ async def browser_sender_verify_open(sender_id: str) -> dict[str, Any]:
     sender = store.get_browser_sender(sender_id)
     if not sender:
         raise HTTPException(404, "Browser sender not found.")
-    profile = _profile_for_sender(sender)
-    launch_url(profile, inbox_url(int(sender["gmail_slot"])))
-    return {"opened": True, "expected_email": sender["expected_email"], "gmail_slot": sender["gmail_slot"]}
+    profiles = await asyncio.to_thread(discover_profiles, force_refresh=True)
+    profile = next((p for p in profiles if p["browser_id"] == sender["browser_id"] and p["profile_dir"] == sender["profile_dir"]), None)
+    if profile is None:
+        raise HTTPException(409, "The saved browser profile is no longer available. Rescan browsers and update this sender.")
+    slot = int(sender["gmail_slot"])
+    expected = str(sender["expected_email"])
+    accounts = profile.get("gmail_accounts") if isinstance(profile, dict) else []
+    detected_email = ""
+    if isinstance(accounts, list) and accounts:
+        detected = next((a for a in accounts if int(a.get("slot", -1)) == slot), None)
+        if detected is None:
+            raise HTTPException(409, f"Gmail account index {slot} is no longer present in this browser profile. Rescan and update the sender.")
+        detected_email = str(detected.get("email") or "")
+        if detected_email.casefold() != expected.casefold():
+            raise HTTPException(409, f"Browser account {slot} now maps to {detected_email}, not {expected}. Update the sender before continuing.")
+    launch_url(profile, inbox_url(slot))
+    return {
+        "opened": True,
+        "expected_email": expected,
+        "detected_email": detected_email,
+        "gmail_slot": slot,
+        "session_cache_age_seconds": profile.get("session_cache_age_seconds"),
+    }
 
 
 @app.post("/api/browser-senders/{sender_id}/verify/confirm")

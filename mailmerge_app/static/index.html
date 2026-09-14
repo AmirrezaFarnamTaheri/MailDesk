@@ -87,7 +87,7 @@
                     <label class="check-row"><input id="trimValues" type="checkbox" checked><span>Trim surrounding whitespace from spreadsheet values</span></label>
                   </details>
                   <div class="sheet-preview-wrap is-hidden" id="sheetPreviewWrap">
-                    <div class="mini-toolbar"><div><strong id="sheetSummary">0 rows</strong><span id="selectionSummary"> · all selected</span></div><div class="toolbar-actions"><button class="button ghost small" id="selectVisibleButton">Select visible</button><button class="button ghost small" id="clearVisibleButton">Clear visible</button></div></div>
+                    <div class="mini-toolbar"><div><strong id="sheetSummary">0 rows</strong><span id="selectionSummary"> · all selected</span></div><div class="toolbar-actions"><button class="button secondary small" id="openSheetViewerButton">Open sheet viewer</button><button class="button ghost small" id="selectVisibleButton">Select visible</button><button class="button ghost small" id="clearVisibleButton">Clear visible</button></div></div>
                     <div class="table-scroll"><table class="data-table selectable" id="sheetPreview"></table></div>
                   </div>
                 </div>
@@ -227,7 +227,7 @@
             <div class="panel-body"><label class="check-row"><input id="includeSheetsScope" type="checkbox" checked><span>Also allow read-only Google Sheets access</span></label><div id="accountList" class="account-list"></div></div>
           </section>
           <section class="panel">
-            <div class="panel-head"><div><h2>Browser senders</h2><p>Open Gmail compose windows in an existing browser profile.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add sender</button></div>
+            <div class="panel-head"><div><h2>Browser senders</h2><p>MailDesk can read Chromium’s cached account order, then verifies the live Gmail account before use.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add sender</button></div>
             <div class="panel-body">
               <div class="browser-route-form" id="browserRouteForm">
                 <input id="browserSenderId" type="hidden">
@@ -238,7 +238,7 @@
                 <div class="detected-browser-block">
                   <div class="field-label-row"><span>Detected Gmail accounts</span><button type="button" class="button ghost small" id="rescanBrowserProfilesButton">Rescan browsers</button></div>
                   <div class="detected-browser-accounts" id="detectedBrowserAccounts"></div>
-                  <p class="hint" id="browserDetectionHint">Choose a browser profile to inspect its cached signed-in Gmail accounts.</p>
+                  <p class="hint" id="browserDetectionHint">Detected addresses come from the browser’s cached Google session, not from the live Gmail page. Rescan before saving and verify once in Gmail.</p>
                 </div>
                 <details class="advanced compact-advanced" id="manualBrowserSenderOptions">
                   <summary>Can’t see the account?</summary>
@@ -276,6 +276,14 @@
       <div class="tour-actions"><button type="button" class="button secondary" id="tourBackButton">Back</button><button type="button" class="button primary" id="tourNextButton">Next</button></div>
     </section>
   </div>
+  <dialog id="sheetViewerDialog" class="sheet-viewer-dialog">
+    <div class="sheet-viewer-shell">
+      <div class="sheet-viewer-head"><div><h2>Spreadsheet viewer</h2><p id="sheetViewerMeta">Inspect the loaded worksheet without changing it.</p></div><button type="button" class="button secondary small" id="closeSheetViewerButton">Close</button></div>
+      <div class="sheet-viewer-toolbar"><input id="sheetViewerSearch" type="search" placeholder="Search rows…" aria-label="Search spreadsheet rows"><span id="sheetViewerRange">0 rows</span></div>
+      <div class="sheet-viewer-table-wrap"><table class="data-table sheet-viewer-table" id="sheetViewerTable"></table></div>
+      <div class="sheet-viewer-footer"><button type="button" class="button secondary" id="sheetViewerPrev">Previous</button><span id="sheetViewerPage">Page 1</span><button type="button" class="button secondary" id="sheetViewerNext">Next</button></div>
+    </div>
+  </dialog>
   <dialog id="snippetDialog" class="modal"><form method="dialog"><h2>Reusable snippet</h2><label class="field"><span>Name</span><input id="snippetName"></label><label class="field"><span>Content</span><textarea id="snippetContent" rows="7"></textarea></label><div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" id="saveSnippetDialogButton" value="default">Save snippet</button></div></form></dialog>
   <dialog id="verifyBrowserDialog" class="modal"><form method="dialog"><h2>Verify browser sender</h2><p id="verifyBrowserText"></p><div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" id="confirmBrowserVerifiedButton" value="default">Confirm account</button></div></form></dialog>
 

@@ -70,6 +70,14 @@ class FrontendIntegrityTests(unittest.TestCase):
             self.assertNotIn(token, INDEX_HTML)
             self.assertNotIn(token, APP_JS)
 
+    def test_sheet_viewer_and_expanded_tour_are_wired(self):
+        self.assertIn('openSheetViewerButton', self.html)
+        self.assertIn('sheetViewerDialog', self.html)
+        self.assertIn('/api/imports/${state.importId}/rows', self.js)
+        self.assertIn("title:'Set up senders carefully'", self.js)
+        self.assertIn("title:'Inspect the source'", self.js)
+        self.assertGreaterEqual(self.js.count("title:'"), 8)
+
     def test_first_run_tour_is_wired_and_replayable(self):
         self.assertIn('id="tourOverlay"', INDEX_HTML)
         self.assertIn('id="startTourButton"', INDEX_HTML)

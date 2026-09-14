@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
@@ -78,6 +79,21 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(rendered.status_code, 200, rendered.text); body=rendered.json()
         self.assertEqual(body["total"],2); self.assertEqual(body["valid"],1); self.assertEqual(body["invalid"],1)
         self.assertTrue(body["batch_id"])
+
+    def test_sheet_viewer_rows_support_search_and_paging(self):
+        upload = self.client.post("/api/imports", files={"file": ("valid.xlsx", self._valid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}).json()
+        response = self.client.get(f"/api/imports/{upload['import_id']}/rows", params={"sheet":"Contacts","limit":1,"offset":0,"q":"lin"})
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["rows"][0]["Email"], "lin@example.com")
+
+    def test_browser_sender_rejects_cached_slot_email_mismatch(self):
+        profile = {"browser_id":"chrome","profile_dir":"Default","gmail_accounts":[{"slot":0,"email":"actual@example.com"}]}
+        with unittest.mock.patch.object(self.main, "discover_profiles", return_value=[profile]):
+            response = self.client.put("/api/browser-senders/test", json={"id":"test","label":"Test","browser_id":"chrome","profile_dir":"Default","gmail_slot":0,"expected_email":"wrong@example.com"})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("actual@example.com", response.text)
 
     def test_empty_selected_rows_means_no_recipients(self):
         upload = self.client.post(

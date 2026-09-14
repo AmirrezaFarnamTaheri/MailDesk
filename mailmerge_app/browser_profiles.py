@@ -118,8 +118,15 @@ def discover_profiles(*, force_refresh: bool = False) -> list[dict[str, object]]
         for profile_dir in sorted(profile_dirs, key=_profile_sort_key):
             raw_info = info_cache.get(profile_dir, {})
             info = raw_info if isinstance(raw_info, dict) else {}
-            preferences = _read_json(user_data / profile_dir / "Preferences")
+            preferences_path = user_data / profile_dir / "Preferences"
+            preferences = _read_json(preferences_path)
             primary_email, gmail_accounts, emails = _extract_profile_accounts(info, preferences)
+            try:
+                session_cache_age_seconds = max(0, int(time.time() - preferences_path.stat().st_mtime))
+            except OSError:
+                session_cache_age_seconds = None
+            for account in gmail_accounts:
+                account["cache_age_seconds"] = session_cache_age_seconds
             output.append(
                 {
                     "browser_id": browser_id,
@@ -131,6 +138,7 @@ def discover_profiles(*, force_refresh: bool = False) -> list[dict[str, object]]
                     "primary_email": primary_email,
                     "gmail_accounts": gmail_accounts,
                     "emails": emails,
+                    "session_cache_age_seconds": session_cache_age_seconds,
                     "profile_id": f"{browser_id}|{profile_dir}",
                 }
             )
@@ -193,11 +201,17 @@ def launch_compose(profile: dict[str, object], url: str) -> None:
 
 
 def _read_json(path: Path) -> dict:
-    try:
-        decoded = json.loads(path.read_text(encoding="utf-8"))
-        return decoded if isinstance(decoded, dict) else {}
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return {}
+    # Chromium rewrites Preferences atomically and a scan can land between replace
+    # operations. A couple of short retries avoid reporting an empty profile just
+    # because the browser happened to be persisting state at that instant.
+    for attempt in range(3):
+        try:
+            decoded = json.loads(path.read_text(encoding="utf-8"))
+            return decoded if isinstance(decoded, dict) else {}
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            if attempt < 2:
+                time.sleep(0.04 * (attempt + 1))
+    return {}
 
 
 def _pref(root: dict, dotted_key: str):
