@@ -88,6 +88,25 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('Create ${count} Gmail draft', APP_JS)
         self.assertIn('`Send ${count} ${plural}`', APP_JS)
 
+    def test_placeholder_mapping_ui_is_wired_to_render_payload(self):
+        self.assertIn('id="placeholderMappingList"', INDEX_HTML)
+        self.assertIn('id="autoMapPlaceholdersButton"', INDEX_HTML)
+        self.assertIn('templatePlaceholderInfo', APP_JS)
+        self.assertIn('placeholder_mappings:Object.fromEntries', APP_JS)
+
+    def test_live_sheet_stays_beside_message_preview(self):
+        self.assertIn('id="liveSheetCard"', INDEX_HTML)
+        self.assertIn('id="liveSheetTable"', INDEX_HTML)
+        self.assertIn('function renderLiveSheet()', APP_JS)
+        self.assertIn("findIndex(message=>String(message.row_number)===String(row._row))", APP_JS)
+
+    def test_browser_sender_setup_prefers_detected_accounts(self):
+        self.assertIn('id="detectedBrowserAccounts"', INDEX_HTML)
+        self.assertIn('id="rescanBrowserProfilesButton"', INDEX_HTML)
+        self.assertIn('/api/browser-profiles?refresh=true', APP_JS)
+        self.assertIn('p?.gmail_accounts||[]', APP_JS)
+        self.assertIn('Can’t see the account?', INDEX_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -96,7 +96,7 @@
 
             <section class="step-pane" data-step-pane="2">
               <div class="panel">
-                <div class="panel-head"><div><h2>Message</h2><p>Write once and insert spreadsheet columns where you want personalization.</p></div><div class="panel-actions"><button class="button ghost small" id="newTemplateButton">New</button><button class="button secondary small" id="saveTemplateButton">Save template</button></div></div>
+                <div class="panel-head"><div><h2>Message</h2><p>Write with reusable placeholders, then map them to columns in this sheet.</p></div><div class="panel-actions"><button class="button ghost small" id="newTemplateButton">New</button><button class="button secondary small" id="saveTemplateButton">Save template</button></div></div>
                 <div class="panel-body">
                   <div class="field-grid two template-fields">
                     <label class="field"><span>Template</span><select id="templateSelect"></select></label>
@@ -109,6 +109,13 @@
                     <div class="rich-toolbar"><button data-rich="bold"><b>B</b></button><button data-rich="italic"><i>I</i></button><button data-rich="insertUnorderedList">• List</button><button id="clearFormattingButton">Clear</button></div>
                     <div id="bodyHtmlEditor" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Optional HTML version of the message"></div>
                     <label class="field compact-top"><span>HTML signature <em>optional</em></span><div id="signatureHtmlEditor" class="rich-editor compact" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Signature, links, logo text…"></div></label>
+                  </div>
+                  <div class="placeholder-mapper">
+                    <div class="placeholder-mapper-head">
+                      <div><strong>Placeholder mapping</strong><span>Choose which sheet column supplies each reusable placeholder.</span></div>
+                      <button type="button" class="button secondary small" id="autoMapPlaceholdersButton">Auto-match</button>
+                    </div>
+                    <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline">Add a placeholder to the message to map it.</div></div>
                   </div>
                   <div class="placeholder-section"><div class="field-label-row"><span>Insert placeholder</span><span class="hint">Defaults: <code>{{Name|there}}</code> · Conditional: <code>{{#if Link}}…{{/if}}</code></span></div><div class="placeholder-list" id="placeholderList"><span class="empty-inline">Load a source to see columns.</span></div></div>
                   <div class="split-section">
@@ -199,6 +206,11 @@
                 <div class="review-meta" id="reviewMeta"></div>
               </div>
             </div>
+            <div class="review-card live-sheet-card" id="liveSheetCard">
+              <div class="review-head"><div><span class="eyebrow">Live sheet</span><strong id="liveSheetSummary">No spreadsheet loaded</strong></div></div>
+              <div class="live-sheet-empty" id="liveSheetEmpty">Load a spreadsheet to keep source rows visible while you write and review.</div>
+              <div class="live-sheet-scroll is-hidden" id="liveSheetScroll"><table class="live-sheet-table" id="liveSheetTable"></table></div>
+            </div>
           </aside>
         </div>
       </section>
@@ -219,8 +231,24 @@
             <div class="panel-body">
               <div class="browser-route-form" id="browserRouteForm">
                 <input id="browserSenderId" type="hidden">
-                <div class="field-grid four"><label class="field"><span>Label</span><input id="browserSenderLabel" placeholder="Work Gmail"></label><label class="field"><span>Browser profile</span><select id="browserProfile"></select></label><label class="field"><span>Account index</span><input id="gmailSlot" type="number" min="0" max="99" value="0"></label><label class="field"><span>Expected email</span><input id="browserExpectedEmail" type="email" list="profileEmails" placeholder="work@example.com"><datalist id="profileEmails"></datalist></label></div>
-                <div class="button-row"><button class="button primary" id="saveBrowserSenderButton">Save sender</button><span class="hint">0 is the first signed-in Gmail account in that browser profile, 1 is the second.</span></div>
+                <div class="field-grid two">
+                  <label class="field"><span>Label</span><input id="browserSenderLabel" placeholder="Work Gmail"></label>
+                  <label class="field"><span>Browser profile</span><select id="browserProfile"></select></label>
+                </div>
+                <div class="detected-browser-block">
+                  <div class="field-label-row"><span>Detected Gmail accounts</span><button type="button" class="button ghost small" id="rescanBrowserProfilesButton">Rescan browsers</button></div>
+                  <div class="detected-browser-accounts" id="detectedBrowserAccounts"></div>
+                  <p class="hint" id="browserDetectionHint">Choose a browser profile to inspect its cached signed-in Gmail accounts.</p>
+                </div>
+                <details class="advanced compact-advanced" id="manualBrowserSenderOptions">
+                  <summary>Can’t see the account?</summary>
+                  <div class="field-grid two">
+                    <label class="field"><span>Account index</span><input id="gmailSlot" type="number" min="0" max="99" value="0"></label>
+                    <label class="field"><span>Expected email</span><input id="browserExpectedEmail" type="email" list="profileEmails" placeholder="work@example.com"><datalist id="profileEmails"></datalist></label>
+                  </div>
+                  <p class="hint">Use this fallback when Gmail’s cached account list is unavailable. Account 0 is the first signed-in Gmail account in that browser profile.</p>
+                </details>
+                <div class="button-row compact-top"><button class="button primary" id="saveBrowserSenderButton">Save sender</button></div>
               </div>
               <div id="browserSenderList" class="browser-sender-list"></div>
             </div>

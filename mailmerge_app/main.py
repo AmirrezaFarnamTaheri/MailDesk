@@ -165,6 +165,7 @@ class RenderRequest(BaseModel):
     row_overrides: dict[str, dict[str, str]] = Field(default_factory=dict, max_length=100_000)
     limit: int = Field(default=0, ge=0, le=100_000)
     trim_values: bool = True
+    placeholder_mappings: dict[str, str] = Field(default_factory=dict, max_length=200)
 
 
 class MessagePayload(BaseModel):
@@ -507,8 +508,8 @@ async def batch_id(payload: BatchHashRequest) -> dict[str, str]:
 
 # ---------- browser profiles and Gmail account slots ----------
 @app.get("/api/browser-profiles")
-async def browser_profiles() -> list[dict[str, object]]:
-    return await asyncio.to_thread(discover_profiles)
+async def browser_profiles(refresh: bool = Query(default=False)) -> list[dict[str, object]]:
+    return await asyncio.to_thread(discover_profiles, force_refresh=refresh)
 
 
 @app.get("/api/browser-senders")
@@ -863,6 +864,9 @@ def _render_row(
     attachment_catalog: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     working = {key: (value.strip() if payload.trim_values and isinstance(value, str) else value) for key, value in row.items()}
+    for placeholder, column in payload.placeholder_mappings.items():
+        if placeholder not in {"_row", "_today"} and column:
+            working[placeholder] = working.get(column, "")
     row_number = int(row.get("_row", "0") or 0)
     subject = render_text(payload.subject, working, row_number)
     body = render_text(payload.body, working, row_number)
@@ -1332,7 +1336,8 @@ def _require_fresh_browser_sender(sender_id: str) -> dict[str, Any]:
 def _validate_mapping_columns(payload: RenderRequest, headers: list[str]) -> None:
     required = [payload.to_column]
     optional = [payload.name_column, payload.cc_column, payload.bcc_column, payload.attachment_column, payload.filter_column, payload.sort_column]
-    if any(column and column not in headers for column in required + optional):
+    mapped = list(payload.placeholder_mappings.values())
+    if any(column and column not in headers for column in required + optional + mapped):
         raise HTTPException(400, "A selected spreadsheet column no longer exists. Refresh the mapping.")
     if not payload.to_column:
         raise HTTPException(400, "Select a recipient email column.")
