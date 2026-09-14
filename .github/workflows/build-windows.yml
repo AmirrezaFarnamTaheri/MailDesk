@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      repair_existing_release:
+        description: 'Explicitly allow moving the existing version tag to this verified build and replacing its assets'
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - main
@@ -108,10 +113,12 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[repair-release]'))
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          BOOTSTRAP_REPAIR: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[repair-release]') }}
+          MANUAL_REPAIR: ${{ github.event_name == 'workflow_dispatch' && inputs.repair_existing_release }}
         run: |
           $pyproject = Get-Content -LiteralPath pyproject.toml -Raw
           $match = [regex]::Match($pyproject, '(?m)^version\s*=\s*"([^"]+)"\s*$')
@@ -133,10 +140,15 @@ jobs:
             if (-not (Test-Path -LiteralPath $asset)) { throw "Missing release asset: $asset" }
           }
 
+          $repairRelease = $env:BOOTSTRAP_REPAIR -eq 'true' -or $env:MANUAL_REPAIR -eq 'true'
           $tagCommit = gh api "repos/$env:GITHUB_REPOSITORY/commits/$tag" --jq '.sha' 2>$null
           $tagExists = $LASTEXITCODE -eq 0
           if ($tagExists -and $tagCommit.Trim() -ne $env:GITHUB_SHA) {
-            throw "Release tag $tag already points to $($tagCommit.Trim()), not this build $env:GITHUB_SHA. Bump the project version before publishing a different commit."
+            if (-not $repairRelease) {
+              throw "Release tag $tag already points to $($tagCommit.Trim()), not this build $env:GITHUB_SHA. Bump the project version, or explicitly choose repair_existing_release for an intentional release repair."
+            }
+            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha=$env:GITHUB_SHA -F force=true *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Could not move release tag $tag to verified build $env:GITHUB_SHA." }
           }
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
@@ -144,8 +156,10 @@ jobs:
           if ($releaseExists) {
             gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { throw "Could not update assets for release $tag." }
-            gh release edit $tag --title "MailDesk $version" --latest --repo $env:GITHUB_REPOSITORY
-            if ($LASTEXITCODE -ne 0) { throw "Could not update release $tag." }
+            $releaseId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id'
+            if ($LASTEXITCODE -ne 0 -or -not $releaseId) { throw "Could not resolve release metadata for $tag." }
+            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f target_commitish=$env:GITHUB_SHA -f name="MailDesk $version" -f make_latest=true *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Could not update release metadata for $tag." }
           } else {
             gh release create $tag @assets `
               --target $env:GITHUB_SHA `
