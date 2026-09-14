@@ -1,1 +1,1 @@
-Run the reviewed product clarity patch once; checksum-verified recovery transport.
+Remove temporary product clarity transport files.
