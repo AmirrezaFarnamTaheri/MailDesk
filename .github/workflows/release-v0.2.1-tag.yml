@@ -1,4 +1,4 @@
-name: One-shot v0.2.1 release tag
+name: One-shot v0.2.1 release dispatch
 
 on:
   push:
@@ -6,30 +6,30 @@ on:
       - main
 
 permissions:
-  contents: write
+  actions: write
+  contents: read
 
 jobs:
-  tag-release-candidate:
+  dispatch-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Verify release candidate
+      - name: Verify v0.2.1 tag target
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git cat-file -e '2dc329bb099814d419712e8d6e7c1d72f5dfa590^{commit}'
-          git show '2dc329bb099814d419712e8d6e7c1d72f5dfa590:pyproject.toml' | grep -F 'version = "0.2.1"'
+          tag_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.2.1 --jq '.object.sha')"
+          test "$tag_sha" = '2dc329bb099814d419712e8d6e7c1d72f5dfa590'
 
-      - name: Push v0.2.1 tag
+      - name: Dispatch release workflow at v0.2.1
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin refs/tags/v0.2.1 >/dev/null 2>&1; then
-            echo 'Tag v0.2.1 already exists; refusing to overwrite it.' >&2
-            exit 1
-          fi
-          git tag v0.2.1 2dc329bb099814d419712e8d6e7c1d72f5dfa590
-          git push origin refs/tags/v0.2.1
+          gh workflow run build-windows.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref v0.2.1 \
+            -f publish_release=true \
+            -f repair_existing_release=false
