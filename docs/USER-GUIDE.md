@@ -92,7 +92,7 @@ If the saved Desktop OAuth client becomes invalid or is replaced, choose **Use a
 
 Open **Accounts → Browser accounts** and choose a browser profile. MailDesk reads that profile and, when Chromium has cached the signed-in Google session, lists Gmail accounts in browser order so the account index and email can be filled automatically. Click **Rescan browsers** after signing in or changing accounts; manual account-index/email entry remains available as a fallback.
 
-Browser drafts are optional. If MailDesk cannot detect a compatible Chrome, Edge, or Brave profile—or its executable/user-data folder moved—**Open drafts in Gmail** stays unavailable until you rescan and select a working profile. Use **Save drafts to Gmail** or **Send emails** with a connected Gmail API account instead. MailDesk never falls back to a different browser or a fresh profile: it launches the exact browser executable, user-data folder, and profile you selected.
+Browser drafts are optional. If MailDesk cannot detect a compatible Chrome, Edge, or Brave profile—or its executable/user-data folder moved—**Open drafts in Gmail** stays unavailable until you rescan and select a working profile. Use **Save drafts to Gmail** or **Send emails** with a connected Gmail API account instead. MailDesk launches the exact browser executable, user-data folder, and profile you selected. If that launch fails, it offers to open Gmail in your system default browser only for recovery; sign in there, rescan, and verify the configured profile before opening drafts.
 
 ```text
 Chrome · Profile 1 · account 0 · personal@example.com

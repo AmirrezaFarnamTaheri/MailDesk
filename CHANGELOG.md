@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Replace typed live-send confirmation with a review dialog that identifies the Gmail account and message count.
+- Bind browser drafts to the selected browser executable, user-data directory, and profile; show recovery guidance when a saved browser path is unavailable.
+
 ## 0.4.0
 
 - added a built-in editable recipient worksheet with in-cell editing, row and column controls, rectangular clipboard paste, and in-place source updates;

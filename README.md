@@ -2,7 +2,7 @@
 
 MailDesk is a **local-first desktop mail-merge application** for preparing reusable email templates, filling them from Excel/CSV/Google Sheets, reviewing every generated message, and then creating browser drafts, Gmail API drafts, or sending through Gmail.
 
-Version: **0.4.0**
+Version: **0.4.1**
 
 ## What changed in 0.4
 
@@ -192,7 +192,7 @@ Outputs:
 
 ```text
 dist/MailDesk.exe
-dist/installer/MailDesk-0.4.0-Setup.exe
+dist/installer/MailDesk-0.4.1-Setup.exe
 ```
 
 Optional signing:

@@ -1,6 +1,6 @@
 #define MyAppName "MailDesk"
 #ifndef MyAppVersion
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.4.1"
 #endif
 #define MyAppPublisher "MailDesk"
 #define MyAppExeName "MailDesk.exe"

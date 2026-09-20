@@ -51,7 +51,7 @@ from .sheet_reader import SUPPORTED_EXTENSIONS, column_profiles, list_sheets, su
 from .storage import Store
 from .template_engine import batch_fingerprint, html_to_text, is_valid_email, message_fingerprint, render_text, split_addresses
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -672,6 +672,16 @@ async def browser_sender_verify_open(sender_id: str) -> dict[str, Any]:
         "gmail_slot": slot,
         "session_cache_age_seconds": profile.get("session_cache_age_seconds"),
     }
+
+
+@app.post("/api/browser-senders/{sender_id}/recovery/open-default-browser")
+async def browser_sender_recovery_open_default_browser(sender_id: str) -> dict[str, bool]:
+    sender = store.get_browser_sender(sender_id)
+    if not sender:
+        raise HTTPException(404, "Browser sender not found.")
+    if not webbrowser.open(inbox_url(int(sender["gmail_slot"])), new=2):
+        raise HTTPException(409, "Could not open your system default browser. Open Gmail manually, then rescan browsers.")
+    return {"opened": True}
 
 
 @app.post("/api/browser-senders/{sender_id}/verify/confirm")
