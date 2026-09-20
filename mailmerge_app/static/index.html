@@ -58,8 +58,8 @@
                         <label class="worksheet-name-field"><span>Worksheet name</span><input id="manualWorksheetName" type="text" maxlength="120" value="Recipients" aria-label="Worksheet name"></label>
                       </div>
                       <div class="worksheet-schema-bar">
-                        <label class="field worksheet-column-name"><span>New column</span><input id="manualWorksheetColumnName" type="text" maxlength="120" placeholder="e.g. Company"></label>
-                        <button type="button" class="button secondary" id="addWorksheetColumnButton">Add column</button>
+                        <span class="worksheet-schema-hint">Rename a column in its heading. Add details only when you need them.</span>
+                        <button type="button" class="button secondary" id="addWorksheetColumnButton">+ Field</button>
                         <button type="button" class="button secondary" id="addWorksheetRowButton">Add row</button>
                         <button type="button" class="button secondary" id="pasteWorksheetButton">Paste from spreadsheet</button>
                         <button type="button" class="button ghost-danger" id="clearWorksheetButton">Clear</button>
@@ -69,8 +69,8 @@
                         <table class="worksheet-grid" id="manualWorksheetTable" aria-label="Built-in recipient worksheet"></table>
                       </div>
                       <div class="worksheet-footer">
-                        <span id="manualWorksheetStatus" aria-live="polite">2 columns · no filled rows · changes not applied</span>
-                        <button type="button" class="button primary" id="applyWorksheetButton">Use worksheet</button>
+                        <span id="manualWorksheetStatus" aria-live="polite">Start typing — changes save automatically</span>
+                        <button type="button" class="button ghost small" id="undoWorksheetButton" disabled>Undo last change</button>
                       </div>
                     </section>
                   </div>
@@ -89,7 +89,7 @@
                     <label class="field"><span>Worksheet</span><select id="sheetSelect" disabled></select></label>
                   </div>
                   <div class="mapping-callout" id="mappingCallout">Load a source and MailDesk will suggest the recipient columns.</div>
-                  <details class="advanced compact-advanced mapping-details" id="recipientMappingDetails" open>
+                  <details class="advanced compact-advanced mapping-details" id="recipientMappingDetails">
                     <summary>Edit column mapping</summary>
                     <div class="field-grid three">
                       <label class="field"><span>Recipient email</span><select id="toColumn" disabled></select></label>
@@ -133,13 +133,13 @@
                       <div class="template-library-actions"><button type="button" class="button secondary small" id="newTemplateButton">New blank</button><button type="button" class="button ghost small" id="duplicateTemplateButton">Duplicate</button></div>
                     </div>
                     <div class="template-identity-row">
-                      <label class="field template-name-field"><span>Template name <em>used when saving</em></span><input id="templateName" type="text" maxlength="120" placeholder="e.g. Partnership follow-up"></label>
-                      <div class="template-save-area"><span class="template-save-status" id="templateSaveStatus">Saved</span><button type="button" class="button primary small" id="saveTemplateButton">Save template</button><button type="button" class="button ghost-danger small" id="deleteTemplateButton">Delete</button></div>
+                      <label class="field template-name-field"><span>Template name <em>optional</em></span><input id="templateName" type="text" maxlength="120" placeholder="e.g. Partnership follow-up"></label>
+                      <div class="template-save-area"><span class="template-save-status" id="templateSaveStatus" aria-live="polite">Changes save automatically</span><button type="button" class="button ghost small" id="undoTemplateButton" disabled>Undo last change</button><button type="button" class="button ghost-danger small" id="deleteTemplateButton">Delete</button></div>
                     </div>
                   </div>
 
                   <div class="quick-insert-bar is-disabled" id="quickInsertBar">
-                    <div class="quick-insert-copy"><strong>Insert a data field</strong><span>Click in the subject or message, choose a column, then insert it at the cursor.</span></div>
+                    <div class="quick-insert-copy"><strong>Add a recipient detail</strong><span>Optional. Click in your message, choose a column, then insert it.</span></div>
                     <select id="quickInsertColumn" aria-label="Column to insert"><option value="">Choose column…</option></select>
                     <button type="button" class="button primary" id="quickInsertFieldButton" disabled>Insert at cursor</button>
                   </div>
@@ -188,6 +188,8 @@
                     </section>
                   </details>
 
+                  <details class="advanced compact-advanced" id="templateExampleDetails">
+                    <summary>Preview one personalized example</summary>
                   <section class="template-sample-card" aria-labelledby="templateSampleTitle">
                     <div class="template-sample-head">
                       <div><span class="section-kicker">Live example</span><strong id="templateSampleTitle">See how the template fills</strong><span>Use a real recipient row before you save or send anything.</span></div>
@@ -199,6 +201,7 @@
                       <div class="template-sample-message"><span>Message</span><pre id="templateSampleBody">Your personalized message will appear here.</pre></div>
                     </div>
                   </section>
+                  </details>
 
                   <div class="composer-tools-label">More writing tools</div>
                   <details class="advanced compact-advanced composer-tool-details">
@@ -248,7 +251,7 @@
                     <div class="sender-card" id="browserSenderSummary"><div class="sender-avatar">B</div><div><strong>No browser account selected</strong><span>Choose or configure a browser account.</span></div><button class="button secondary small" id="verifySelectedBrowserButton">Verify account</button></div>
                   </div>
                   <div id="gmailDelivery" class="delivery-options is-hidden">
-                    <label class="field"><span>Send from</span><select id="gmailAccount"></select></label>
+                    <label class="field"><span>Send from</span><select id="gmailAccount" aria-describedby="gmailAccountHelp"></select><small class="field-help" id="gmailAccountHelp">Choose the Gmail account that will create or send these messages.</small></label>
                   </div>
                   <div class="field-grid two compact-top">
                     <label class="field"><span>Campaign name</span><input id="campaignName" type="text" placeholder="September outreach"></label>
