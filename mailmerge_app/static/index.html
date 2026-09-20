@@ -44,22 +44,37 @@
           <div class="workflow-main">
             <section class="step-pane is-visible" data-step-pane="1">
               <div class="panel">
-                <div class="panel-head"><div><h2>Recipients</h2><p>Load a spreadsheet and choose the recipient column.</p></div><div class="panel-state" id="sourceState">Not loaded</div></div>
+                <div class="panel-head"><div><h2>Recipients</h2><p>Create a list here, paste rows from a worksheet, or load an existing spreadsheet.</p></div><div class="panel-state" id="sourceState">Not loaded</div></div>
                 <div class="panel-body">
                   <div class="source-tabs">
-                    <button type="button" class="source-tab" data-source-tab="worksheet" aria-pressed="false">Built-in worksheet</button>
-                    <button type="button" class="source-tab is-active" data-source-tab="file" aria-pressed="true">Local file</button>
+                    <button type="button" class="source-tab is-active" data-source-tab="worksheet" aria-pressed="true">Built-in worksheet</button>
+                    <button type="button" class="source-tab" data-source-tab="file" aria-pressed="false">Excel / CSV</button>
                     <button type="button" class="source-tab" data-source-tab="google" aria-pressed="false">Google Sheets</button>
                   </div>
-                  <div id="worksheetSourcePane" class="source-pane">
-                    <label class="field"><span>Worksheet name</span><input id="manualWorksheetName" value="Recipients" maxlength="120"></label>
-                    <label class="field"><span>Columns (one per line)</span><textarea id="manualWorksheetColumnName" rows="3">Email
-Name</textarea></label>
-                    <label class="field"><span>Recipients (tab-separated; first row is data)</span><textarea id="worksheetPasteInput" rows="7" placeholder="ada@example.com	Ada"></textarea></label>
-                    <div class="button-row"><button type="button" class="button primary" id="applyWorksheetButton">Use worksheet</button></div>
-                    <span id="manualWorksheetStatus" class="hint"></span>
+                  <div id="worksheetSourcePane" class="source-pane is-visible">
+                    <section class="worksheet-builder" aria-labelledby="worksheetBuilderTitle">
+                      <div class="worksheet-builder-head">
+                        <div><span class="section-kicker">Create recipients here</span><strong id="worksheetBuilderTitle">Built-in worksheet</strong><span>Add only the columns you need, then type or paste recipient data directly into MailDesk.</span></div>
+                        <label class="worksheet-name-field"><span>Worksheet name</span><input id="manualWorksheetName" type="text" maxlength="120" value="Recipients" aria-label="Worksheet name"></label>
+                      </div>
+                      <div class="worksheet-schema-bar">
+                        <label class="field worksheet-column-name"><span>New column</span><input id="manualWorksheetColumnName" type="text" maxlength="120" placeholder="e.g. Company"></label>
+                        <button type="button" class="button secondary" id="addWorksheetColumnButton">Add column</button>
+                        <button type="button" class="button secondary" id="addWorksheetRowButton">Add row</button>
+                        <button type="button" class="button secondary" id="pasteWorksheetButton">Paste from spreadsheet</button>
+                        <button type="button" class="button ghost-danger" id="clearWorksheetButton">Clear</button>
+                      </div>
+                      <div class="worksheet-tip"><strong>Tip:</strong> click any cell and paste a copied range from Excel or Google Sheets. Tabs fill columns; new lines fill rows.</div>
+                      <div class="worksheet-grid-wrap">
+                        <table class="worksheet-grid" id="manualWorksheetTable" aria-label="Built-in recipient worksheet"></table>
+                      </div>
+                      <div class="worksheet-footer">
+                        <span id="manualWorksheetStatus" aria-live="polite">2 columns · no filled rows · changes not applied</span>
+                        <button type="button" class="button primary" id="applyWorksheetButton">Use worksheet</button>
+                      </div>
+                    </section>
                   </div>
-                  <div id="fileSourcePane" class="source-pane is-visible">
+                  <div id="fileSourcePane" class="source-pane">
                     <label class="dropzone" for="sheetFile" id="dropzone"><input id="sheetFile" type="file" accept=".xlsx,.xlsm,.csv" hidden><span class="dropzone-icon">⇧</span><span class="dropzone-main" id="sheetFileLabel">Choose Excel / CSV or drop it here</span><span class="dropzone-sub">.xlsx, .xlsm, .csv · up to 25 MB</span></label>
                   </div>
                   <div id="googleSourcePane" class="source-pane">
@@ -121,6 +136,12 @@ Name</textarea></label>
                       <label class="field template-name-field"><span>Template name <em>used when saving</em></span><input id="templateName" type="text" maxlength="120" placeholder="e.g. Partnership follow-up"></label>
                       <div class="template-save-area"><span class="template-save-status" id="templateSaveStatus">Saved</span><button type="button" class="button primary small" id="saveTemplateButton">Save template</button><button type="button" class="button ghost-danger small" id="deleteTemplateButton">Delete</button></div>
                     </div>
+                  </div>
+
+                  <div class="quick-insert-bar is-disabled" id="quickInsertBar">
+                    <div class="quick-insert-copy"><strong>Insert a data field</strong><span>Click in the subject or message, choose a column, then insert it at the cursor.</span></div>
+                    <select id="quickInsertColumn" aria-label="Column to insert"><option value="">Choose column…</option></select>
+                    <button type="button" class="button primary" id="quickInsertFieldButton" disabled>Insert at cursor</button>
                   </div>
 
                   <label class="field compact-top"><span>Subject</span><input id="subjectTemplate" type="text" maxlength="998" placeholder="A quick note for {{Name|there}}"></label>

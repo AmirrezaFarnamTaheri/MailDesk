@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- added a built-in editable recipient worksheet with in-cell editing, row and column controls, rectangular clipboard paste, and in-place source updates;
+- added one-click recipient-field insertion into the active subject or message editor;
+- completed the OAuth 2.1-compatible desktop authorization flow with PKCE S256, bounded single-use state, exact-origin popup handoff, local browser session reuse, reconnect identity binding, and explicit revocation;
+- added Playwright screenshot capture and CI visual-review artifacts for the real loopback application;
+- added worksheet, OAuth lifecycle, queue-safety, accessibility-integrity, and remediation regression coverage;
+- changed the project license to Apache License 2.0.
+
 ## 0.3.1
 
 - Hardened the built-in Google OAuth 2.0 authorization-code flow: canonical loopback redirect construction, one-time callback state consumption, bounded authorization sessions, no-store callback responses, stricter bearer-token validation, and clearer provider errors.

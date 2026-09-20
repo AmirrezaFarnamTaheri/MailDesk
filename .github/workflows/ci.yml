@@ -82,7 +82,7 @@ jobs:
         with:
           name: MailDesk-Visual-Review-${{ github.sha }}
           path: |
-            artifacts/visual-review/senders.png
+            artifacts/visual-review/*.png
             ${{ runner.temp }}/maildesk-visual-review.log
           if-no-files-found: warn
           retention-days: 14

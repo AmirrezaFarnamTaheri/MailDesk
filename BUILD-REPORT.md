@@ -1,19 +1,19 @@
-# MailDesk 0.3.1 — Integration Report
+# MailDesk 0.4.0 — Integration Report
 
 ## Current implementation status
 
 | Area | Status | Delivered |
 |---|---|---|
 | Desktop shell | Done | pywebview desktop shell, loopback FastAPI service, single-instance lock, packaging and installer workflow |
-| Guided templates | Done | reusable templates, spreadsheet-field insertion, fallback values, mapping health, unsaved-change protection, duplication and live sample recipient preview |
-| Spreadsheet workflow | Done | XLSX/CSV/Google Sheets snapshots, header detection, mappings, filters, row selection and preview |
+| Guided templates | Done | reusable templates, one-click data-field insertion, fallback values, mapping health, unsaved-change protection, duplication and live sample recipient preview |
+| Recipient data workflow | Done | built-in editable worksheet, rectangular clipboard paste, XLSX/CSV/Google Sheets snapshots, header detection, mappings, filters, row selection and preview |
 | Gmail OAuth | Done | OAuth 2.1-compatible authorization code + PKCE (S256), canonical 127.0.0.1 loopback callback, local-browser sign-in popup handoff, single-use bounded state sessions, encrypted per-account tokens/clients, reusable encrypted Desktop OAuth client, token refresh/rotation, account health checks, reconnect identity binding and explicit revoke endpoint |
 | Browser senders | Done | Chromium profile/account discovery, `/u/N/` routing and time-bounded human verification |
 | Gmail delivery | Done | Gmail API draft/send, MIME HTML/attachments/CID images, exact-account verification and uncertain-outcome handling |
 | Queue/scheduling | Done | durable queue, pause/resume/cancel/retry, scheduling, restart-to-paused recovery and duplicate protection |
 | Audit/history | Done | per-operation results, remote IDs, CSV export and campaign inspection |
 | Safety | Done | dry run, send confirmation, scope checks, attachment policy, local-origin guard, secret redaction and migration backups |
-| CI visual review | Done | Playwright starts the real loopback service, opens Senders, asserts Gmail OAuth/browser sender controls, and uploads a review screenshot plus server log |
+| CI visual review | Done | Playwright starts the real loopback service, verifies the built-in worksheet and Senders OAuth/browser controls, and uploads both review screenshots plus the server log |
 | OAuth reference integration | Done | compatible lifecycle patterns merged; obsolete OAuth 1.0, Python 2 password/IMAP code, embedded OAuth server and IMAP/POP/SMTP proxy deliberately not vendored |
 
 ## OAuth/Gmail reference integration
@@ -31,13 +31,14 @@ Key outcomes:
 
 ## Verification performed
 
-- `pytest -q` — **128 passed**.
+- `pytest -q` — **132 passed**.
 - `python -m compileall -q mailmerge_app` — passed.
 - `node --check mailmerge_app/static/app.js` — passed.
 - `python scripts/visual_review_e2e.py` — passed against a running local application; the review image is written to `artifacts/visual-review/senders.png`.
-- Version consistency — package, runtime, pyproject and installer all **0.3.1**.
-- Live loopback API smoke — `/api/health` returned `{"status":"ok","version":"0.3.1"}`.
+- Version consistency — package, runtime, pyproject and installer all **0.4.0**.
+- Live loopback API smoke — `/api/health` reports version **0.4.0**.
 - OAuth-specific regression coverage includes PKCE/login hints, canonical loopback redirect construction, single-use/bounded state sessions, no-store callback responses, reusable client setup, bearer-token validation, refresh-token rotation, invalid-grant handling, expected-account reconnect binding, least-privilege Sheets opt-in, non-secret health output and revocation.
+- Built-in worksheet regression coverage includes schema creation, duplicate/reserved column rejection, rendering through the normal import pipeline, in-place source updates, clipboard-oriented frontend wiring, unique DOM IDs, and quick placeholder insertion.
 
 ## CI review evidence
 

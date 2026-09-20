@@ -50,6 +50,9 @@ async def review(args: argparse.Namespace) -> Path:
             await page.add_init_script("localStorage.setItem('maildesk-tour-seen-v1', '1')")
             await wait_for_application(page, args.url)
             await expect(page.get_by_test_id("main-content")).to_be_visible()
+            await expect(page.get_by_role("region", name="Built-in worksheet")).to_be_visible()
+            await expect(page.get_by_role("table", name="Built-in recipient worksheet")).to_be_visible()
+            await page.screenshot(path=str(output.with_name("compose-worksheet.png")), full_page=True)
 
             await page.get_by_test_id("nav-senders").click()
             await expect(page.get_by_role("heading", name="Senders & settings")).to_be_visible()
@@ -67,7 +70,7 @@ def main() -> None:
         output = asyncio.run(review(parse_args()))
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    print(f"Visual review written to {output}")
+    print(f"Visual reviews written to {output.with_name('compose-worksheet.png')} and {output}")
 
 
 if __name__ == "__main__":

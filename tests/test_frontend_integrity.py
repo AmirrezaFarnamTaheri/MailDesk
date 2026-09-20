@@ -27,6 +27,11 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertEqual(sorted(referenced - declared), [], "frontend JavaScript references elements that are never registered")
         self.assertEqual(sorted(declared - html_ids), [], "registered frontend elements are missing from index.html")
 
+    def test_html_ids_are_unique(self):
+        html_ids = re.findall(r"\bid=[\"']([^\"']+)[\"']", INDEX_HTML)
+        duplicates = sorted({html_id for html_id in html_ids if html_ids.count(html_id) > 1})
+        self.assertEqual(duplicates, [], "duplicate HTML ids make labels and JavaScript references ambiguous")
+
     def test_single_frontend_script_has_no_patch_layer(self):
         self.assertIn('/static/app.js', INDEX_HTML)
         self.assertNotIn('/static/safety.js', INDEX_HTML)
@@ -105,11 +110,19 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('`Send ${count} ${plural}`', APP_JS)
 
     def test_builtin_worksheet_and_quick_placeholder_insertion_are_wired(self):
-        for token in ("worksheetSourcePane", "manualWorksheetName", "manualWorksheetColumnName", "worksheetPasteInput", "applyWorksheetButton"):
+        for token in (
+            "worksheetSourcePane", "manualWorksheetName", "manualWorksheetColumnName", "manualWorksheetTable",
+            "addWorksheetColumnButton", "addWorksheetRowButton", "pasteWorksheetButton", "applyWorksheetButton",
+            "worksheetPasteDialog", "worksheetPasteInput", "quickInsertColumn", "quickInsertFieldButton",
+        ):
             self.assertIn(f'id="{token}"', INDEX_HTML)
         self.assertIn("/api/imports/worksheet", APP_JS)
         self.assertIn("function applyManualWorksheet", APP_JS)
+        self.assertIn("function fillWorksheetRange", APP_JS)
+        self.assertIn("function applyWorksheetPaste", APP_JS)
+        self.assertIn("function insertQuickField", APP_JS)
         self.assertIn("Built-in worksheet", INDEX_HTML)
+        self.assertIn("Paste from spreadsheet", INDEX_HTML)
 
     def test_guided_placeholder_builder_covers_source_fallback_and_insertion(self):
         for token in ('placeholderNameInput', 'placeholderSourceSelect', 'placeholderFallbackInput', 'placeholderTokenPreview', 'placeholderSamplePreview', 'placeholderInsertTarget', 'insertPlaceholderButton', 'insertConditionalButton', 'placeholderMappingSummary'):
@@ -197,7 +210,7 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('class="skip-link" href="#mainContent"', INDEX_HTML)
         self.assertIn('id="mainContent"', INDEX_HTML)
         self.assertIn('class="nav-icon" aria-hidden="true"', INDEX_HTML)
-        self.assertIn('class="source-tab is-active" data-source-tab="file" aria-pressed="true"', INDEX_HTML)
+        self.assertIn('class="source-tab is-active" data-source-tab="worksheet" aria-pressed="true"', INDEX_HTML)
         self.assertIn('class="editor-tab is-active" data-editor="plain" aria-pressed="true"', INDEX_HTML)
         self.assertIn('id="busyOverlay" class="busy-overlay is-hidden" role="status" aria-live="polite" aria-hidden="true"', INDEX_HTML)
         self.assertIn("setAttribute('aria-pressed',String(active))", APP_JS)

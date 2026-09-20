@@ -4,13 +4,13 @@ MailDesk is a **local-first desktop mail-merge application** for preparing reusa
 
 Version: **0.4.0**
 
-## What changed in 0.3
+## What changed in 0.4
 
 The original PowerShell workflow has been generalized into a product rather than wrapped as-is. This release addresses the full next-stage backlog:
 
 1. **Desktop productionization** — native pywebview window, first-run guided tour, single-instance guard, persistent UI preferences, version/about endpoint, database backups, PyInstaller + Inno Setup packaging, optional Authenticode signing.
 2. **Guided reusable templates** — plain text + HTML, signatures, snippets, defaults (`{{Name|there}}`), conditionals (`{{#if Link}}…{{/if}}`), attachments, Content-ID inline images, spreadsheet-field insertion, mapping checks, unsaved-change protection, duplication, and a live example recipient preview.
-3. **Smarter spreadsheet handling** — Excel/CSV drag-and-drop, header detection, automatic column suggestions, recipient/name/Cc/Bcc/attachment mapping, filters, row selection, campaign-only cell edits, duplicate-recipient warnings, large-sheet guardrails.
+3. **Smarter recipient data handling** — a built-in editable worksheet with rectangular clipboard paste, plus Excel/CSV drag-and-drop and Google Sheets snapshots, header detection, automatic column suggestions, mappings, filters, row selection, duplicate-recipient warnings, and large-sheet guardrails.
 4. **First-class multi-account support** — Gmail API accounts are separate from browser senders. Google Desktop OAuth setup is reusable across account connections, while each Gmail account keeps its own encrypted token/client pair. Browser senders store the browser profile, account index and expected email.
 5. **Persistent send queue** — each message has a durable state and campaign ID; campaigns can be paused, resumed, cancelled, inspected, throttled, and failed items retried. Interrupted running campaigns come back **Paused**, never silently resumed.
 6. **Delivery controls** — dry run, internal batch-integrity checks, sender verification, duplicate protection, attachment limits, blocked executable attachments, configurable batch cap, and typed confirmation for live sends.
@@ -198,7 +198,7 @@ Outputs:
 
 ```text
 dist/MailDesk.exe
-dist/installer/MailDesk-0.3.1-Setup.exe
+dist/installer/MailDesk-0.4.0-Setup.exe
 ```
 
 Optional signing:

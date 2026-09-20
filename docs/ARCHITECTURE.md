@@ -10,10 +10,11 @@ Desktop shell (pywebview)
         ▼
 FastAPI loopback application
  ├─ Template/render engine
+ ├─ Built-in worksheet/import pipeline
  ├─ Spreadsheet adapter (CSV/XLSX)
  ├─ Google Sheets snapshot adapter
  ├─ Browser route adapter
- ├─ OAuth 2.0 client lifecycle + PKCE adapter
+ ├─ OAuth 2.1-compatible client lifecycle + PKCE adapter
  ├─ Gmail API adapter
  ├─ Persistent campaign queue
  └─ SQLite/secret storage
@@ -58,6 +59,6 @@ This prevents a live Sheet changing silently after the user reviewed the campaig
 
 The Google Desktop OAuth client is stored once in the encrypted local secret store (`oauth_clients`) and reused for later account connections. Each Gmail account still stores its own encrypted token and the client configuration that issued it, so existing accounts continue to refresh correctly even if the reusable default client is later changed or forgotten.
 
-Authorization sessions are one-time, in-memory, PKCE-bound records with a ten-minute lifetime. Reconnect sessions also carry the expected email address; the callback refuses to overwrite the account if Google returns a different identity. Refresh responses accept refresh-token rotation rather than assuming refresh tokens are immutable.
+Authorization sessions are one-time, in-memory, PKCE S256-bound records with a ten-minute lifetime. The loopback callback and popup handoff use exact local origins, and the user can reuse the signed-in local browser session. Reconnect sessions also carry the expected email address; the callback refuses to overwrite the account if Google returns a different identity. Refresh responses accept refresh-token rotation rather than assuming refresh tokens are immutable.
 
 MailDesk remains an OAuth **client**, not an authorization server or protocol proxy. The supplied authorization-server and IMAP/POP/SMTP proxy projects were used as design references only where their client-side lifecycle patterns fit this architecture. See `OAUTH-INTEGRATION.md`.
