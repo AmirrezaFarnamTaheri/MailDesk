@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.async_api import Error as PlaywrightError
@@ -47,6 +48,8 @@ async def review(args: argparse.Namespace) -> list[Path]:
         "write": "write.png",
         "preview": "preview.png",
         "send": "send.png",
+        "gmail_api": "gmail-api-mode.png",
+        "browser_drafts": "browser-drafts-mode.png",
         "campaigns": "campaigns.png",
         "activity": "activity.png",
         "accounts": output.name,
@@ -71,8 +74,57 @@ async def review(args: argparse.Namespace) -> list[Path]:
                 body=json.dumps({"auth_url": f"{args.url}/oauth/mock-consent"}),
             )
 
+        async def mock_json(route, payload):
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+        async def mock_accounts(route):
+            await mock_json(
+                route,
+                [{
+                    "email": "mail@northstar.example",
+                    "gmail": True,
+                    "sheets": False,
+                    "access_valid": True,
+                    "refresh_available": True,
+                    "updated_at": "2026-09-20T00:00:00+00:00",
+                    "credential_error": "",
+                }],
+            )
+
+        async def mock_browser_profiles(route):
+            await mock_json(
+                route,
+                [{
+                    "profile_id": "chrome:Default",
+                    "browser_id": "chrome",
+                    "profile_dir": "Default",
+                    "browser_name": "Chrome",
+                    "profile_name": "Default",
+                    "emails": ["ops@northstar.example"],
+                    "gmail_accounts": [{"slot": 0, "email": "ops@northstar.example", "valid": True}],
+                    "session_cache_age_seconds": 30,
+                }],
+            )
+
+        async def mock_browser_accounts(route):
+            await mock_json(
+                route,
+                [{
+                    "id": "browser-default",
+                    "label": "Northstar operations",
+                    "browser_id": "chrome",
+                    "profile_dir": "Default",
+                    "gmail_slot": 0,
+                    "expected_email": "ops@northstar.example",
+                    "verified_at": datetime.now(timezone.utc).isoformat(),
+                }],
+            )
+
         await context.route("**/oauth/mock-consent", mock_external_google)
         await context.route("**/api/accounts/google/start", mock_oauth_start)
+        await context.route("**/api/accounts", mock_accounts)
+        await context.route("**/api/browser-profiles", mock_browser_profiles)
+        await context.route("**/api/browser-senders", mock_browser_accounts)
         page = await context.new_page()
         try:
             await page.add_init_script("localStorage.setItem('maildesk-tour-seen-v1', '1')")
@@ -81,27 +133,45 @@ async def review(args: argparse.Namespace) -> list[Path]:
             worksheet = page.get_by_role("region", name="Built-in worksheet")
             await expect(worksheet).to_be_visible()
             await expect(page.get_by_role("table", name="Built-in recipient worksheet")).to_be_visible()
+            await page.get_by_role("textbox", name="Email, row 1").fill("ada@northstar.example")
+            await page.get_by_role("textbox", name="Name, row 1").fill("Ada Lovelace")
+            await page.locator("#addWorksheetRowButton").click()
+            await page.get_by_role("textbox", name="Email, row 2").fill("grace@northstar.example")
+            await page.get_by_role("textbox", name="Name, row 2").fill("Grace Hopper")
             await page.screenshot(path=str(output.with_name(names["worksheet"])), full_page=True)
-
-            await page.get_by_role("textbox", name="Email, row 1").fill("ada@example.com")
-            await page.get_by_role("textbox", name="Name, row 1").fill("Ada")
             await page.get_by_role("button", name="Use worksheet").click()
             email_column = page.get_by_role("combobox", name="Recipient email")
             await page.locator("#recipientMappingDetails").get_by_text("Edit column mapping").click()
             await email_column.select_option("Email")
             await page.get_by_role("button", name="Continue to write").click()
             await expect(page.get_by_role("heading", name="Write")).to_be_visible()
+            await page.get_by_role("textbox", name="Subject").fill("Your September account review, {{Name}}")
+            await page.get_by_role("textbox", name="Message").fill(
+                "Hi {{Name}},\n\nYour September account review is ready. Reply to this email if you would like to talk through the next steps.\n\nBest,\nThe Northstar team"
+            )
             await page.screenshot(path=str(output.with_name(names["write"])), full_page=True)
-
-            await page.get_by_role("textbox", name="Subject").fill("Hello {{Name}}")
-            await page.get_by_role("textbox", name="Message").fill("Welcome, {{Name}}.")
             await page.get_by_role("button", name="Preview messages").click()
             await expect(page.get_by_role("heading", name="Preview")).to_be_visible()
             await page.screenshot(path=str(output.with_name(names["preview"])), full_page=True)
 
             await page.get_by_role("button", name="Continue to send").click()
             await expect(page.get_by_role("heading", name="Send")).to_be_visible()
+            await page.locator("#campaignName").fill("September account reviews")
             await page.screenshot(path=str(output.with_name(names["send"])), full_page=True)
+
+            await page.locator('input[name="mode"][value="draft"]').evaluate(
+                "input => { input.checked = true; input.dispatchEvent(new Event('change', {bubbles: true})); }"
+            )
+            await expect(page.locator("#gmailDelivery")).to_be_visible()
+            await expect(page.locator("#gmailAccount")).to_have_value("mail@northstar.example")
+            await page.screenshot(path=str(output.with_name(names["gmail_api"])), full_page=True)
+
+            await page.locator('input[name="mode"][value="browser"]').evaluate(
+                "input => { input.checked = true; input.dispatchEvent(new Event('change', {bubbles: true})); }"
+            )
+            await expect(page.locator("#browserDelivery")).to_be_visible()
+            await expect(page.locator("#browserSenderSummary")).to_contain_text("ops@northstar.example")
+            await page.screenshot(path=str(output.with_name(names["browser_drafts"])), full_page=True)
 
             await page.get_by_role("button", name="Campaigns").click()
             await expect(page.locator("#queueView").get_by_role("heading", name="Campaigns")).to_be_visible()

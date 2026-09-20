@@ -223,6 +223,34 @@ class QueuePersistenceRegressionTests(unittest.TestCase):
         self.assertEqual(restarted.queue_items(campaign["id"]), [])
         self.assertEqual(restarted.history(1)[0]["result"], "Uncertain")
 
+    def test_restart_does_not_reopen_an_unrelated_cancelled_campaign(self):
+        store = Store(self.path)
+        interrupted = self._campaign(store)
+        store.update_item(interrupted["items"][0]["id"], status="InFlight", increment_attempt=True)
+        restart_error = "Gmail operation was in flight during application restart; inspect Gmail before resolving this item."
+        cancelled = store.create_campaign(
+            {
+                "name": "Cancelled campaign",
+                "mode": "send",
+                "account": "sender@example.com",
+                "batch_id": "cancelled-campaign-batch",
+                "status": "Cancelled",
+                "throttle_ms": 0,
+                "skip_duplicates": True,
+            },
+            [{
+                "row_number": "2", "to": "cancelled@example.com", "cc": "", "bcc": "",
+                "subject": "Cancelled", "body": "Body", "body_html": "", "attachments": [],
+                "fingerprint": "cancelled-fingerprint",
+            }],
+        )
+        store.update_item(cancelled["items"][0]["id"], status="NeedsReview", error=restart_error)
+
+        restarted = Store(self.path)
+
+        self.assertEqual(restarted.get_campaign(interrupted["id"])["status"], "Paused")
+        self.assertEqual(restarted.get_campaign(cancelled["id"])["status"], "Cancelled")
+
     def test_campaign_counters_follow_status_transitions_without_rescan(self):
         store = Store(self.path)
         campaign = self._campaign(store, count=2)

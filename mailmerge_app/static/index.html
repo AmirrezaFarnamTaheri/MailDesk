@@ -208,7 +208,7 @@
 
                   <details class="advanced compact-advanced composer-tool-details">
                     <summary>Attachments</summary>
-                    <div class="composer-tool-body"><div class="field-label-row"><span>Attached files</span><label class="button ghost small" for="attachmentFile">Add file<input id="attachmentFile" type="file" hidden multiple></label></div><div class="attachment-list" id="attachmentList"></div><p class="hint">Up to 20 MB each. Browser compose cannot attach files automatically.</p></div>
+                    <div class="composer-tool-body"><div class="field-label-row"><span>Attached files</span><button type="button" class="button ghost small" id="attachmentFileButton">Add file</button><input id="attachmentFile" type="file" hidden multiple></div><div class="attachment-list" id="attachmentList"></div><p class="hint">Up to 20 MB each. Browser compose cannot attach files automatically.</p></div>
                   </details>
 
                   <details class="advanced compact-advanced composer-tool-details">
@@ -309,7 +309,7 @@
               <div><h2>Gmail accounts</h2><p>Set up Google OAuth 2.0 once, then connect or reconnect Gmail accounts without uploading the client file again.</p></div>
               <div class="button-row">
                 <button type="button" class="button primary" id="connectGoogleButton">Connect Gmail</button>
-                <label class="button secondary" id="oauthFileLabel" for="oauthFile">Set up OAuth<input id="oauthFile" type="file" accept="application/json,.json" hidden></label>
+                <button type="button" class="button secondary" id="oauthFileLabel">Set up OAuth</button><input id="oauthFile" type="file" accept="application/json,.json" hidden>
               </div>
             </div>
             <div class="panel-body">
@@ -368,9 +368,9 @@
       <div class="tour-actions"><button type="button" class="button secondary" id="tourBackButton">Back</button><button type="button" class="button primary" id="tourNextButton">Next</button></div>
     </section>
   </div>
-  <dialog id="worksheetPasteDialog" class="modal worksheet-paste-dialog">
+  <dialog id="worksheetPasteDialog" class="modal worksheet-paste-dialog" aria-labelledby="worksheetPasteTitle">
     <form method="dialog">
-      <h2>Paste from a spreadsheet</h2>
+      <h2 id="worksheetPasteTitle">Paste from a spreadsheet</h2>
       <p class="modal-copy">Copy cells from Excel, Google Sheets, Numbers, or another table and paste them below.</p>
       <label class="field"><span>Copied cells</span><textarea id="worksheetPasteInput" rows="11" placeholder="Email	Name	Company&#10;ada@example.com	Ada	Analytical Engines"></textarea></label>
       <div class="field-grid two">

@@ -121,8 +121,10 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("function fillWorksheetRange", APP_JS)
         self.assertIn("function applyWorksheetPaste", APP_JS)
         self.assertIn("function insertQuickField", APP_JS)
+        self.assertIn("function insertMappedPlaceholder", APP_JS)
         self.assertIn("Built-in worksheet", INDEX_HTML)
         self.assertIn("Paste from spreadsheet", INDEX_HTML)
+        self.assertIn('aria-labelledby="worksheetPasteTitle"', INDEX_HTML)
 
     def test_guided_placeholder_builder_covers_source_fallback_and_insertion(self):
         for token in ('placeholderNameInput', 'placeholderSourceSelect', 'placeholderFallbackInput', 'placeholderTokenPreview', 'placeholderSamplePreview', 'placeholderInsertTarget', 'insertPlaceholderButton', 'insertConditionalButton', 'placeholderMappingSummary'):
@@ -188,6 +190,8 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("function checkGoogleAccount(email)", APP_JS)
         self.assertIn("Forget saved client", APP_JS)
         self.assertIn("does not revoke the Google authorization", APP_JS)
+        self.assertIn("els.oauthFileLabel.addEventListener('click',()=>els.oauthFile.click())", APP_JS)
+        self.assertIn('id="attachmentFileButton"', INDEX_HTML)
 
     def test_browser_sender_setup_prefers_detected_accounts(self):
         self.assertIn('id="detectedBrowserAccounts"', INDEX_HTML)

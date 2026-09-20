@@ -370,15 +370,22 @@ class Store:
             # A process can stop after Gmail accepts a send/draft but before the
             # response is persisted. Never make that item replayable on restart.
             restart_error = "Gmail operation was in flight during application restart; inspect Gmail before resolving this item."
+            affected_campaign_ids = [
+                row["campaign_id"]
+                for row in db.execute(
+                    "SELECT DISTINCT campaign_id FROM queue_items WHERE status='InFlight'"
+                ).fetchall()
+            ]
             db.execute(
                 "UPDATE queue_items SET status='NeedsReview',error=?,updated_at=? WHERE status='InFlight'",
                 (restart_error, _utc_now()),
             )
-            db.execute(
-                """UPDATE campaigns SET status='Paused',completed_at='',last_error=?
-                   WHERE id IN (SELECT campaign_id FROM queue_items WHERE status='NeedsReview' AND error=?)""",
-                (restart_error, restart_error),
-            )
+            if affected_campaign_ids:
+                placeholders = ",".join("?" for _ in affected_campaign_ids)
+                db.execute(
+                    f"UPDATE campaigns SET status='Paused',completed_at='',last_error=? WHERE id IN ({placeholders})",
+                    (restart_error, *affected_campaign_ids),
+                )
             self._recover_operation_outbox(db)
             self._seed(db)
             # Queued/Running work belonged to the previous process's event loop.

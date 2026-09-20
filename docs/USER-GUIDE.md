@@ -2,6 +2,16 @@
 
 On a fresh install, MailDesk opens a short guided tour. You can replay it any time with **Quick tour** in the sidebar.
 
+## The everyday flow
+
+MailDesk is designed around one short decision path: choose recipients, write one reusable message, review the generated emails, then choose a delivery method. The optional controls stay collapsed until you need them.
+
+### Start with recipients
+
+Use the built-in worksheet for a small campaign, or choose a file or Google Sheet for an existing list. Confirm the recipient-email column, then continue.
+
+![A completed built-in worksheet with two recipients](images/compose-worksheet.png)
+
 ## 1. Recipients
 
 Load an Excel/CSV file or a Google Sheet. Confirm the worksheet, header row and recipient-email column. MailDesk suggests common mappings automatically.
@@ -12,7 +22,7 @@ Use **More recipient options** only when you need Cc/Bcc columns, filtering, sor
 
 Choose a saved template or click **New blank**. Give reusable messages a clear **Template name**; MailDesk shows whether the template is saved or has unsaved changes, and warns before switching away from unsaved work. Use **Duplicate** when you want to make a variant without changing the original.
 
-Write the subject and message normally. To personalize them, use **Add spreadsheet data**:
+Write the subject and message normally. For a simple field, use **Insert a data field**. For fallbacks, conditions, or custom mapping, open **Advanced personalization**.
 
 1. Choose the spreadsheet column under **Fill from**.
 2. Add a **Fallback if blank** when an empty value should still produce a natural message, such as `there` for a first-name greeting.
@@ -25,11 +35,15 @@ The **Fields used in this template** section shows every field, its source colum
 
 The **Live example** panel fills the template with a real spreadsheet row while you edit it. Change **Example recipient** to test another row. Resolve any “Needs mapping” or blank-value warning before saving or continuing. This is the fastest way to check that greetings, company names, links, and other personalized fields read naturally.
 
+![A personalized account-review email in the Write step](images/write.png)
+
 Snippets, attachments, formatted HTML, signatures and Cc/Bcc options remain available under **More writing tools**.
 
 ## 3. Preview
 
 MailDesk automatically prepares personalized messages for manageable batches as you edit. Open **Preview** to inspect the generated result for every selected row. Use **Refresh preview** when you explicitly want to rebuild it. Fix blocking errors before continuing; one-off recipient/message edits can still be made from the message preview.
+
+![Previewing the first personalized recipient email](images/preview.png)
 
 ## 4. Send
 
@@ -42,6 +56,16 @@ Choose one delivery action:
 
 Campaign name, schedule, pacing and duplicate handling are optional. Scheduled work requires MailDesk and the computer to remain running. Live sending requires one typed confirmation: `SEND N`, where `N` is the number of messages.
 
+### Choose the right delivery path
+
+Use a **Gmail API account** when you want MailDesk to save drafts or send mail through the Gmail API. The account is connected once with the OAuth popup and can be reused for later campaigns.
+
+![Gmail API draft mode with a connected account selected](images/gmail-api-mode.png)
+
+Use **Open drafts in Gmail** when you prefer Gmail’s normal compose window. MailDesk opens the configured local browser profile and Gmail account slot; it requires a recent verification of that account before it creates drafts.
+
+![Browser-drafts mode with a verified local Gmail account selected](images/browser-drafts-mode.png)
+
 ## Campaigns
 
 Use **Campaigns** to inspect active, scheduled and completed campaigns, pause or resume work, retry failed messages, cancel a campaign, and inspect row-level results.
@@ -51,6 +75,10 @@ If Gmail returns an uncertain result during a draft or send operation, MailDesk 
 ## Gmail accounts
 
 Open **Accounts → Gmail accounts**. On first setup, choose **Set up & connect** and select a Google OAuth **Desktop app** JSON file. MailDesk encrypts and remembers that client configuration locally. After the first setup, use **Connect Gmail** to add another account without choosing the JSON again.
+
+The sign-in opens in a dedicated popup. If the browser already has a Google session, Google may offer that account, but you still approve the OAuth connection explicitly.
+
+![The dedicated Google OAuth sign-in popup used by MailDesk](images/oauth-popup.png)
 
 Leave **Google Sheets access** enabled when you want that account to load Sheet snapshots. Existing accounts show:
 
@@ -70,3 +98,5 @@ Chrome · Profile 1 · account 1 · work@example.com
 ```
 
 Use **Verify** before browser processing. The account index follows Gmail's signed-in account order, so verify again if that order changes or the verification expires.
+
+![The Accounts page with Gmail API and browser-account setup](images/accounts.png)

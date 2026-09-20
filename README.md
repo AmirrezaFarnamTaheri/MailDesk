@@ -237,7 +237,7 @@ MAILMERGE_SIGN_CERT_PASSWORD
 
 ### CI visual review
 
-The standard CI workflow also runs a broad Playwright journey on Ubuntu. It starts the real local application, reviews **Write**, **Preview**, **Send**, **Campaigns**, **Activity**, **Accounts**, the built-in worksheet, and a mocked OAuth consent popup, then uploads the screenshot set and server log as a `MailDesk-Visual-Review-<commit>` artifact. The tour is suppressed only for this stable visual baseline; it remains covered by frontend regression tests. This is an approval aid for UI changes, while the browser assertions make it a genuine end-to-end gate.
+The standard CI workflow also runs a broad Playwright journey on Ubuntu. It starts the real local application, reviews **Write**, **Preview**, **Send**, **Campaigns**, **Activity**, **Accounts**, the built-in worksheet, a mocked OAuth consent popup, and both delivery configurations: a connected **Gmail API** account and a verified local **browser-drafts** account. It uploads the screenshot set and server log as a `MailDesk-Visual-Review-<commit>` artifact. The tour is suppressed only for this stable visual baseline; it remains covered by frontend regression tests. This is an approval aid for UI changes, while the browser assertions make it a genuine end-to-end gate.
 
 ## Test
 

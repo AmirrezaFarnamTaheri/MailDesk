@@ -55,7 +55,6 @@ jobs:
     env:
       PYTHONUTF8: '1'
       PIP_DISABLE_PIP_VERSION_CHECK: '1'
-      MAILDESK_DATA_DIR: ${{ runner.temp }}/maildesk-visual-review
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -71,6 +70,8 @@ jobs:
         run: python -m playwright install --with-deps chromium
       - name: Exercise the full product visual-review journey
         shell: bash
+        env:
+          MAILDESK_DATA_DIR: ${{ runner.temp }}/maildesk-visual-review
         run: |
           python -m uvicorn mailmerge_app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/maildesk-visual-review.log" 2>&1 &
           server_pid=$!
