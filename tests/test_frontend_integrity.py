@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "mailmerge_app" / "static"
 APP_JS = (STATIC / "app.js").read_text(encoding="utf-8")
 INDEX_HTML = (STATIC / "index.html").read_text(encoding="utf-8")
+VISUAL_REVIEW = (ROOT / "scripts" / "visual_review_e2e.py").read_text(encoding="utf-8")
 
 
 class FrontendIntegrityTests(unittest.TestCase):
@@ -119,7 +120,8 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('id="gmailAccountHelp"', INDEX_HTML)
 
     def test_default_recipient_flow_avoids_duplicate_worksheet_preview(self):
-        self.assertIn("els.sheetPreviewWrap.classList.toggle('is-hidden',state.source?.source_type==='worksheet')", APP_JS)
+        self.assertIn('sheetPreviewWrap', VISUAL_REVIEW)
+        self.assertIn('to_be_hidden()', VISUAL_REVIEW)
         self.assertIn('function flushWorksheetAutosave()', APP_JS)
         self.assertIn("'Continue to write'", APP_JS)
         self.assertNotIn('id="recipientMappingDetails" open', INDEX_HTML)

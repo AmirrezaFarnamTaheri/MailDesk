@@ -140,6 +140,7 @@ async def review(args: argparse.Namespace) -> list[Path]:
             await page.get_by_role("textbox", name="Name, row 2").fill("Grace Hopper")
             await page.screenshot(path=str(output.with_name(names["worksheet"])), full_page=True)
             await expect(page.locator("#manualWorksheetStatus")).to_contain_text("saved automatically")
+            await expect(page.locator("#sheetPreviewWrap")).to_be_hidden()
             await page.get_by_role("button", name="Continue to write").click()
             await expect(page.get_by_role("heading", name="Write")).to_be_visible()
             await page.get_by_role("textbox", name="Subject").fill("Your September account review, {{Name}}")
