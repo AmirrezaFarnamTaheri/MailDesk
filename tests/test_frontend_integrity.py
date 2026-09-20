@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "mailmerge_app" / "static"
 APP_JS = (STATIC / "app.js").read_text(encoding="utf-8")
 INDEX_HTML = (STATIC / "index.html").read_text(encoding="utf-8")
+VISUAL_REVIEW = (ROOT / "scripts" / "visual_review_e2e.py").read_text(encoding="utf-8")
 
 
 class FrontendIntegrityTests(unittest.TestCase):
@@ -111,10 +112,30 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('Create ${count} Gmail draft', APP_JS)
         self.assertIn('`Send ${count} ${plural}`', APP_JS)
 
+    def test_delivery_blockers_explain_the_next_safe_action(self):
+        self.assertIn('No Gmail accounts connected', APP_JS)
+        self.assertIn('Connect Gmail to continue', APP_JS)
+        self.assertIn('data-delivery-setup', APP_JS)
+        self.assertIn('Choose a Gmail account…', APP_JS)
+        self.assertIn('id="gmailAccountHelp"', INDEX_HTML)
+
+    def test_default_recipient_flow_avoids_duplicate_worksheet_preview(self):
+        self.assertIn('sheetPreviewWrap', VISUAL_REVIEW)
+        self.assertIn('to_be_hidden()', VISUAL_REVIEW)
+        self.assertIn('function flushWorksheetAutosave()', APP_JS)
+        self.assertIn("'Continue to write'", APP_JS)
+        self.assertNotIn('id="recipientMappingDetails" open', INDEX_HTML)
+
+    def test_error_messages_add_concrete_recovery_guidance(self):
+        self.assertIn('function actionableError(message)', APP_JS)
+        self.assertIn('Remove that {{field}} from the message', APP_JS)
+        self.assertIn('open Accounts and connect Gmail first', APP_JS)
+        self.assertIn('Rescan browsers in Accounts', APP_JS)
+
     def test_builtin_worksheet_and_quick_placeholder_insertion_are_wired(self):
         for token in (
-            "worksheetSourcePane", "manualWorksheetName", "manualWorksheetColumnName", "manualWorksheetTable",
-            "addWorksheetColumnButton", "addWorksheetRowButton", "pasteWorksheetButton", "applyWorksheetButton",
+            "worksheetSourcePane", "manualWorksheetName", "manualWorksheetTable",
+            "addWorksheetColumnButton", "addWorksheetRowButton", "pasteWorksheetButton", "undoWorksheetButton",
             "worksheetPasteDialog", "worksheetPasteInput", "quickInsertColumn", "quickInsertFieldButton",
         ):
             self.assertIn(f'id="{token}"', INDEX_HTML)
@@ -156,13 +177,13 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn("function templateFieldReadiness(", APP_JS)
         self.assertIn("function insertIntoTemplateTarget(", APP_JS)
 
-    def test_template_changes_are_not_silently_discarded(self):
+    def test_template_changes_save_automatically_with_undo(self):
         self.assertIn("templateDirty: false", APP_JS)
-        self.assertIn("function canLeaveTemplate()", APP_JS)
-        self.assertIn("Discard unsaved template changes?", APP_JS)
-        self.assertIn("New template · not saved", APP_JS)
-        self.assertIn("Unsaved changes", APP_JS)
-        self.assertIn("els.saveTemplateButton.disabled=true", APP_JS)
+        self.assertIn("function scheduleTemplateAutosave()", APP_JS)
+        self.assertIn("function undoTemplateChange()", APP_JS)
+        self.assertIn('id="undoTemplateButton"', INDEX_HTML)
+        self.assertNotIn('id="saveTemplateButton"', INDEX_HTML)
+        self.assertIn("Saved automatically", APP_JS)
 
     def test_four_step_workflow_has_no_stale_step_five_jump(self):
         self.assertNotIn("setStep(5)", APP_JS)
