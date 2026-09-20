@@ -36,7 +36,7 @@ MailDesk automatically prepares personalized messages for manageable batches as 
 Choose one delivery action:
 
 - **Test only** — validate the campaign without creating or sending email.
-- **Open drafts in Gmail** — open reviewed compose windows in a verified browser sender.
+- **Open drafts in Gmail** — open reviewed compose windows in a verified browser account.
 - **Save drafts to Gmail** — create drafts through a connected Gmail account.
 - **Send emails** — send through a connected Gmail account.
 
@@ -50,7 +50,7 @@ If Gmail returns an uncertain result during a draft or send operation, MailDesk 
 
 ## Gmail accounts
 
-Open **Senders → Gmail accounts**. On first setup, choose **Set up & connect** and select a Google OAuth **Desktop app** JSON file. MailDesk encrypts and remembers that client configuration locally. After the first setup, use **Connect Gmail** to add another account without choosing the JSON again.
+Open **Accounts → Gmail accounts**. On first setup, choose **Set up & connect** and select a Google OAuth **Desktop app** JSON file. MailDesk encrypts and remembers that client configuration locally. After the first setup, use **Connect Gmail** to add another account without choosing the JSON again.
 
 Leave **Google Sheets access** enabled when you want that account to load Sheet snapshots. Existing accounts show:
 
@@ -60,9 +60,9 @@ Leave **Google Sheets access** enabled when you want that account to load Sheet 
 
 If the saved Desktop OAuth client becomes invalid or is replaced, choose **Use another OAuth client**. Forgetting the reusable client does not disconnect accounts that are already stored because each account retains the encrypted client that issued its refresh token.
 
-## Browser senders
+## Browser accounts
 
-Open **Senders → Browser senders** and choose a browser profile. MailDesk reads that profile and, when Chromium has cached the signed-in Google session, lists Gmail accounts in browser order so the account index and email can be filled automatically. Click **Rescan browsers** after signing in or changing accounts; manual account-index/email entry remains available as a fallback.
+Open **Accounts → Browser accounts** and choose a browser profile. MailDesk reads that profile and, when Chromium has cached the signed-in Google session, lists Gmail accounts in browser order so the account index and email can be filled automatically. Click **Rescan browsers** after signing in or changing accounts; manual account-index/email entry remains available as a fallback.
 
 ```text
 Chrome · Profile 1 · account 0 · personal@example.com

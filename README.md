@@ -11,9 +11,9 @@ The original PowerShell workflow has been generalized into a product rather than
 1. **Desktop productionization** — native pywebview window, first-run guided tour, single-instance guard, persistent UI preferences, version/about endpoint, database backups, PyInstaller + Inno Setup packaging, optional Authenticode signing.
 2. **Guided reusable templates** — plain text + HTML, signatures, snippets, defaults (`{{Name|there}}`), conditionals (`{{#if Link}}…{{/if}}`), attachments, Content-ID inline images, spreadsheet-field insertion, mapping checks, unsaved-change protection, duplication, and a live example recipient preview.
 3. **Smarter recipient data handling** — a built-in editable worksheet with rectangular clipboard paste, plus Excel/CSV drag-and-drop and Google Sheets snapshots, header detection, automatic column suggestions, mappings, filters, row selection, duplicate-recipient warnings, and large-sheet guardrails.
-4. **First-class multi-account support** — Gmail API accounts are separate from browser senders. Google Desktop OAuth setup is reusable across account connections, while each Gmail account keeps its own encrypted token/client pair. Browser senders store the browser profile, account index and expected email.
+4. **First-class multi-account support** — Gmail API accounts are separate from browser login accounts. Google Desktop OAuth setup is reusable across account connections, while each Gmail account keeps its own encrypted token/client pair. Browser accounts store the browser profile, account index and expected email.
 5. **Persistent send queue** — each message has a durable state and campaign ID; campaigns can be paused, resumed, cancelled, inspected, throttled, and failed items retried. Interrupted running campaigns come back **Paused**, never silently resumed.
-6. **Delivery controls** — dry run, internal batch-integrity checks, sender verification, duplicate protection, attachment limits, blocked executable attachments, configurable batch cap, and typed confirmation for live sends.
+6. **Delivery controls** — dry run, internal batch-integrity checks, account verification, duplicate protection, attachment limits, blocked executable attachments, configurable batch cap, and typed confirmation for live sends.
 7. **Scheduling + campaign history** — campaigns may be scheduled, operation history is queryable/exportable, and a local audit ledger records every attempt and remote ID.
 8. **Four-step GUI** — Recipients → Write → Preview → Send, with progressive disclosure, guided template filling, message review, and per-message edits.
 9. **Google Sheets snapshots** — connect with read-only Sheets scope, load a spreadsheet by URL/ID, refresh its snapshot, then review the snapshot before processing.
@@ -29,7 +29,7 @@ Chrome / Profile 1
 └── Gmail /u/1/ → work@example.com
 ```
 
-MailDesk saves each browser sender as:
+MailDesk saves each browser account as:
 
 ```text
 Browser:         Chrome
@@ -41,7 +41,7 @@ Label:           Work Gmail
 
 Browser drafts are opened using the exact slot URL, e.g. `https://mail.google.com/mail/u/1/?view=cm...`.
 
-Gmail account indexes depend on the current signed-in account order. Before browser drafts run, MailDesk opens the configured account and asks you to confirm that the visible email matches the saved sender. Verification expires after 30 minutes.
+Gmail account indexes depend on the current signed-in account order. Before browser drafts run, MailDesk opens the configured account and asks you to confirm that the visible email matches the saved browser account. Verification expires after 30 minutes.
 
 ## Run from source
 
@@ -89,11 +89,11 @@ For Gmail API drafts/sends and Google Sheets:
 3. Configure an OAuth consent screen.
 4. Create an OAuth Client ID of type **Desktop app**.
 5. Download its JSON.
-6. In **Senders → Gmail accounts**, choose **Set up & connect** and select the JSON once.
-7. Complete Google sign-in in the dedicated popup. Google can reuse the account already signed in to your local browser; on completion MailDesk closes the popup and refreshes the sender list. MailDesk stores the Desktop client encrypted on this device, so later accounts can use **Connect Gmail** without selecting the JSON again.
+6. In **Accounts → Gmail accounts**, choose **Set up & connect** and select the JSON once.
+7. Complete Google sign-in in the dedicated popup. Google can reuse the account already signed in to your local browser; on completion MailDesk closes the popup and refreshes the account list. MailDesk stores the Desktop client encrypted on this device, so later accounts can use **Connect Gmail** without selecting the JSON again.
 8. Leave read-only Google Sheets access enabled if you want Sheet snapshots.
 
-Each connected account now exposes **Check** and **Reconnect** actions. Reconnect is locked to the expected email address, so authorizing the wrong Google account cannot silently replace another sender. A local **Disconnect** only removes MailDesk's stored credential; the API also exposes explicit revocation when a full Google authorization revoke is required.
+Each connected account now exposes **Check** and **Reconnect** actions. Reconnect is locked to the expected email address, so authorizing the wrong Google account cannot silently replace another account. A local **Disconnect** only removes MailDesk's stored credential; the API also exposes explicit revocation when a full Google authorization revoke is required.
 
 Scopes used:
 
@@ -153,14 +153,14 @@ A process restart converts an interrupted `Running` campaign to `Paused`. The us
 
 Scheduling is local. MailDesk and the machine must be running at the scheduled time.
 
-For a scheduled **browser** campaign, sender verification may expire before execution. In that case the campaign pauses until the sender is verified again and resumed.
+For a scheduled **browser** campaign, account verification may expire before execution. In that case the campaign pauses until the account is verified again and resumed.
 
 ## Real-send confirmation
 
 For `N` messages, live sending requires:
 
 1. zero blocking validation errors;
-2. a connected Gmail sender account;
+2. a connected Gmail account;
 3. typing:
 
 ```text
@@ -237,7 +237,7 @@ MAILMERGE_SIGN_CERT_PASSWORD
 
 ### CI visual review
 
-The standard CI workflow also runs a focused Playwright journey on Ubuntu. It starts the real local application, opens **Senders**, verifies the Gmail OAuth and browser-sender surfaces, and uploads the resulting screenshot and server log as a `MailDesk-Visual-Review-<commit>` artifact. The tour is suppressed only for this stable visual baseline; it remains covered by frontend regression tests. This is an approval aid for UI changes, while the browser assertions make it a genuine end-to-end gate.
+The standard CI workflow also runs a broad Playwright journey on Ubuntu. It starts the real local application, reviews **Write**, **Preview**, **Send**, **Campaigns**, **Activity**, **Accounts**, the built-in worksheet, and a mocked OAuth consent popup, then uploads the screenshot set and server log as a `MailDesk-Visual-Review-<commit>` artifact. The tour is suppressed only for this stable visual baseline; it remains covered by frontend regression tests. This is an approval aid for UI changes, while the browser assertions make it a genuine end-to-end gate.
 
 ## Test
 
@@ -253,7 +253,7 @@ To capture the running desktop interface in a repeatable browser viewport:
 ```bash
 python -m playwright install chromium
 python scripts/capture_screenshot.py --full-page
-python scripts/visual_review_e2e.py --output artifacts/visual-review/senders.png
+python scripts/visual_review_e2e.py --output artifacts/visual-review/accounts.png
 ```
 
 The suite covers template safety, Unicode/RTL, spreadsheet parsing, mapping suggestions, large workbooks, OAuth/PKCE scopes, MIME HTML/attachments, Gmail account slots, persistent queue behavior, restart pausing, malformed uploads, executable attachment blocking, and dry-run execution.

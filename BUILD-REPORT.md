@@ -8,12 +8,12 @@
 | Guided templates | Done | reusable templates, one-click data-field insertion, fallback values, mapping health, unsaved-change protection, duplication and live sample recipient preview |
 | Recipient data workflow | Done | built-in editable worksheet, rectangular clipboard paste, XLSX/CSV/Google Sheets snapshots, header detection, mappings, filters, row selection and preview |
 | Gmail OAuth | Done | OAuth 2.1-compatible authorization code + PKCE (S256), canonical 127.0.0.1 loopback callback, local-browser sign-in popup handoff, single-use bounded state sessions, encrypted per-account tokens/clients, reusable encrypted Desktop OAuth client, token refresh/rotation, account health checks, reconnect identity binding and explicit revoke endpoint |
-| Browser senders | Done | Chromium profile/account discovery, `/u/N/` routing and time-bounded human verification |
+| Browser accounts | Done | Chromium profile/account discovery, `/u/N/` routing and time-bounded account verification |
 | Gmail delivery | Done | Gmail API draft/send, MIME HTML/attachments/CID images, exact-account verification and uncertain-outcome handling |
 | Queue/scheduling | Done | durable queue, pause/resume/cancel/retry, scheduling, restart-to-paused recovery and duplicate protection |
 | Audit/history | Done | per-operation results, remote IDs, CSV export and campaign inspection |
 | Safety | Done | dry run, send confirmation, scope checks, attachment policy, local-origin guard, secret redaction and migration backups |
-| CI visual review | Done | Playwright starts the real loopback service, verifies the built-in worksheet and Senders OAuth/browser controls, and uploads both review screenshots plus the server log |
+| CI visual review | Done | Playwright starts the real loopback service, reviews worksheet, Write, Preview, Send, Campaigns, Activity, Accounts, and a mocked OAuth consent popup, and uploads the screenshot set plus the server log |
 | OAuth reference integration | Done | compatible lifecycle patterns merged; obsolete OAuth 1.0, Python 2 password/IMAP code, embedded OAuth server and IMAP/POP/SMTP proxy deliberately not vendored |
 
 ## OAuth/Gmail reference integration
@@ -34,7 +34,7 @@ Key outcomes:
 - `pytest -q` — **132 passed**.
 - `python -m compileall -q mailmerge_app` — passed.
 - `node --check mailmerge_app/static/app.js` — passed.
-- `python scripts/visual_review_e2e.py` — passed against a running local application; the review image is written to `artifacts/visual-review/senders.png`.
+- `python scripts/visual_review_e2e.py` — passed against a running local application; worksheet, Write, Preview, Send, Campaigns, Activity, Accounts, and OAuth popup screenshots are written to `artifacts/visual-review/`.
 - Version consistency — package, runtime, pyproject and installer all **0.4.0**.
 - Live loopback API smoke — `/api/health` reports version **0.4.0**.
 - OAuth-specific regression coverage includes PKCE/login hints, canonical loopback redirect construction, single-use/bounded state sessions, no-store callback responses, reusable client setup, bearer-token validation, refresh-token rotation, invalid-grant handling, expected-account reconnect binding, least-privilege Sheets opt-in, non-secret health output and revocation.
@@ -42,4 +42,4 @@ Key outcomes:
 
 ## CI review evidence
 
-The CI workflow uploads `MailDesk-Visual-Review-<commit>` for every push and pull request. The artifact contains the browser-generated Senders screenshot and service log, making the rendered OAuth account setup reviewable alongside the automated end-to-end assertions.
+The CI workflow uploads `MailDesk-Visual-Review-<commit>` for every push and pull request. The artifact contains the browser-generated product screenshot set and service log, making the rendered workflow and OAuth account setup reviewable alongside the automated end-to-end assertions.

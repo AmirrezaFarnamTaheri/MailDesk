@@ -30,7 +30,7 @@ No queue broker, cloud database, frontend build system, service mesh, or remote 
 ## Source modules
 
 - `main.py` — API contract, validation, campaign worker/scheduler and composition.
-- `storage.py` — migrations, encrypted credential persistence, templates, sender routes, attachments, history and queue state.
+- `storage.py` — migrations, encrypted credential persistence, templates, browser account routes, attachments, history and queue state.
 - `template_engine.py` — non-executable placeholder/default/conditional rendering and fingerprints.
 - `sheet_reader.py` — CSV/XLSX parsing, header detection and mapping suggestions.
 - `oauth_client.py` — provider-neutral OAuth 2.0 authorization-code/PKCE, refresh-token rotation, health metadata and revocation primitives.

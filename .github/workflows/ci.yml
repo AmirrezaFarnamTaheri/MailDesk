@@ -69,13 +69,13 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
-      - name: Exercise the Senders visual-review journey
+      - name: Exercise the full product visual-review journey
         shell: bash
         run: |
           python -m uvicorn mailmerge_app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/maildesk-visual-review.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          python scripts/visual_review_e2e.py --output artifacts/visual-review/senders.png
+          python scripts/visual_review_e2e.py --output artifacts/visual-review/accounts.png
       - name: Upload visual review
         if: always()
         uses: actions/upload-artifact@v4

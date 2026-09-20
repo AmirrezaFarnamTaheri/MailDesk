@@ -219,7 +219,7 @@ class FrontendIntegrityTests(unittest.TestCase):
 
     def test_visual_review_e2e_has_stable_product_selectors(self):
         self.assertIn('data-testid="main-content"', INDEX_HTML)
-        self.assertIn('data-testid="nav-senders"', INDEX_HTML)
+        self.assertIn('data-testid="nav-accounts"', INDEX_HTML)
         self.assertIn('data-testid="gmail-oauth-setup"', INDEX_HTML)
 
     def test_tour_keeps_keyboard_focus_inside_dialog(self):
