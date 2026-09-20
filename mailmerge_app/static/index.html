@@ -47,8 +47,17 @@
                 <div class="panel-head"><div><h2>Recipients</h2><p>Load a spreadsheet and choose the recipient column.</p></div><div class="panel-state" id="sourceState">Not loaded</div></div>
                 <div class="panel-body">
                   <div class="source-tabs">
+                    <button type="button" class="source-tab" data-source-tab="worksheet" aria-pressed="false">Built-in worksheet</button>
                     <button type="button" class="source-tab is-active" data-source-tab="file" aria-pressed="true">Local file</button>
                     <button type="button" class="source-tab" data-source-tab="google" aria-pressed="false">Google Sheets</button>
+                  </div>
+                  <div id="worksheetSourcePane" class="source-pane">
+                    <label class="field"><span>Worksheet name</span><input id="manualWorksheetName" value="Recipients" maxlength="120"></label>
+                    <label class="field"><span>Columns (one per line)</span><textarea id="manualWorksheetColumnName" rows="3">Email
+Name</textarea></label>
+                    <label class="field"><span>Recipients (tab-separated; first row is data)</span><textarea id="worksheetPasteInput" rows="7" placeholder="ada@example.com	Ada"></textarea></label>
+                    <div class="button-row"><button type="button" class="button primary" id="applyWorksheetButton">Use worksheet</button></div>
+                    <span id="manualWorksheetStatus" class="hint"></span>
                   </div>
                   <div id="fileSourcePane" class="source-pane is-visible">
                     <label class="dropzone" for="sheetFile" id="dropzone"><input id="sheetFile" type="file" accept=".xlsx,.xlsm,.csv" hidden><span class="dropzone-icon">⇧</span><span class="dropzone-main" id="sheetFileLabel">Choose Excel / CSV or drop it here</span><span class="dropzone-sub">.xlsx, .xlsm, .csv · up to 25 MB</span></label>
@@ -61,7 +70,7 @@
                     <div class="button-row"><button class="button primary" id="loadGoogleSheetButton">Load snapshot</button><button class="button secondary is-hidden" id="refreshGoogleSheetButton">Refresh snapshot</button><span class="hint" id="snapshotHint"></span></div>
                   </div>
 
-                  <div class="field-grid compact-top">
+                  <div class="field-grid compact-top source-sheet-selector is-hidden" id="sourceSheetSelector">
                     <label class="field"><span>Worksheet</span><select id="sheetSelect" disabled></select></label>
                   </div>
                   <div class="mapping-callout" id="mappingCallout">Load a source and MailDesk will suggest the recipient columns.</div>
@@ -123,25 +132,27 @@
                     <label class="field compact-top"><span>Signature <em>optional</em></span><div id="signatureHtmlEditor" class="rich-editor compact" contenteditable="true" role="textbox" aria-label="Formatted signature" aria-multiline="true" data-placeholder="Signature, links, logo text…"></div></label>
                   </div>
 
-                  <section class="template-fill-card" aria-labelledby="templateFillTitle">
+                  <details class="advanced compact-advanced composer-tool-details personalization-workbench-details" id="personalizationWorkbenchDetails">
+                    <summary><span>Advanced personalization</span><span class="summary-note">Fallbacks, conditions, custom names & mapping</span></summary>
+                    <section class="template-fill-card" aria-labelledby="templateFillTitle">
                     <div class="template-fill-head">
-                      <div><span class="section-kicker">Personalization</span><strong id="templateFillTitle">Add spreadsheet data</strong><span>Pick a column, see a real example, then insert it into the template.</span></div>
+                      <div><span class="section-kicker">Personalization</span><strong id="templateFillTitle">Add recipient data</strong><span>Pick a column, see a real example, then insert it into the template.</span></div>
                       <span class="template-fill-status" id="templateFillStatus">No personalized fields yet</span>
                     </div>
                     <div class="template-field-builder">
-                      <label class="field"><span>Fill from</span><select id="placeholderSourceSelect"><option value="">Choose a spreadsheet column…</option></select></label>
+                      <label class="field"><span>Fill from</span><select id="placeholderSourceSelect"><option value="">Choose a data column…</option></select></label>
                       <label class="field"><span>Fallback if blank <em>recommended for greetings</em></span><input id="placeholderFallbackInput" type="text" maxlength="240" autocomplete="off" placeholder="e.g. there"></label>
                       <label class="field insert-target-field"><span>Insert into</span><select id="placeholderTargetSelect"><option value="body">Message</option><option value="subject">Subject</option><option value="cc">Cc</option><option value="bcc">Bcc</option></select><small id="placeholderInsertTarget">Will insert into · Message</small></label>
                       <div class="template-field-action"><button type="button" class="button primary" id="insertPlaceholderButton" disabled>Insert field</button><button type="button" class="button secondary" id="insertConditionalButton" disabled>Only show when filled</button></div>
                     </div>
                     <div class="template-field-preview">
                       <div><span>Template token</span><code id="placeholderTokenPreview">{{Placeholder}}</code></div>
-                      <div><span>Example value</span><strong id="placeholderSamplePreview">Choose a spreadsheet column</strong></div>
+                      <div><span>Example value</span><strong id="placeholderSamplePreview">Choose a data column</strong></div>
                       <details class="field-name-advanced"><summary>Use a custom field name</summary><label class="field"><span>Field name</span><input id="placeholderNameInput" type="text" maxlength="80" autocomplete="off" placeholder="FirstName"></label></details>
                     </div>
                     <div class="placeholder-quick-source">
                       <div><span>Quick insert</span><small>Choose a column below, then click Insert field.</small></div>
-                      <div class="placeholder-list" id="placeholderList"><span class="empty-inline">Load recipients to see spreadsheet columns.</span></div>
+                      <div class="placeholder-list" id="placeholderList"><span class="empty-inline">Create or load recipients to see data columns.</span></div>
                     </div>
                     <details class="template-field-mapping" id="personalizationDetails">
                       <summary><span>Fields used in this template</span><span class="summary-note" id="personalizationSummary">No fields yet</span></summary>
@@ -150,14 +161,15 @@
                           <div><strong>How fields are filled</strong><span id="placeholderMappingSummary">No placeholders in this template yet.</span></div>
                           <button type="button" class="button secondary small" id="autoMapPlaceholdersButton">Auto-match columns</button>
                         </div>
-                        <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline placeholder-empty-state">Insert a spreadsheet field above to get started.</div></div>
+                        <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline placeholder-empty-state">Insert a data field above to get started.</div></div>
                       </div>
                     </details>
-                  </section>
+                    </section>
+                  </details>
 
                   <section class="template-sample-card" aria-labelledby="templateSampleTitle">
                     <div class="template-sample-head">
-                      <div><span class="section-kicker">Live example</span><strong id="templateSampleTitle">See how the template fills</strong><span>Use a real spreadsheet row before you save or send anything.</span></div>
+                      <div><span class="section-kicker">Live example</span><strong id="templateSampleTitle">See how the template fills</strong><span>Use a real recipient row before you save or send anything.</span></div>
                       <label class="template-sample-row"><span>Example recipient</span><select id="templateSampleRowSelect" disabled><option value="">Load recipients first</option></select></label>
                     </div>
                     <div class="template-sample-status" id="templateSampleStatus">Load recipients to test this template with real data.</div>
@@ -256,8 +268,8 @@
               </div>
             </div>
             <details class="review-card live-sheet-card" id="liveSheetCard">
-              <summary class="review-head source-row-summary"><div><span class="eyebrow">Source row</span><strong id="liveSheetSummary">No spreadsheet loaded</strong></div><span class="review-expand">View</span></summary>
-              <div class="live-sheet-empty" id="liveSheetEmpty">Load a spreadsheet to inspect source rows beside the message preview.</div>
+              <summary class="review-head source-row-summary"><div><span class="eyebrow">Source row</span><strong id="liveSheetSummary">No recipient data loaded</strong></div><span class="review-expand">View</span></summary>
+              <div class="live-sheet-empty" id="liveSheetEmpty">Create or load recipients to inspect source rows beside the message preview.</div>
               <div class="live-sheet-scroll is-hidden" id="liveSheetScroll"><table class="live-sheet-table" id="liveSheetTable"></table></div>
             </details>
           </aside>
@@ -335,6 +347,18 @@
       <div class="tour-actions"><button type="button" class="button secondary" id="tourBackButton">Back</button><button type="button" class="button primary" id="tourNextButton">Next</button></div>
     </section>
   </div>
+  <dialog id="worksheetPasteDialog" class="modal worksheet-paste-dialog">
+    <form method="dialog">
+      <h2>Paste from a spreadsheet</h2>
+      <p class="modal-copy">Copy cells from Excel, Google Sheets, Numbers, or another table and paste them below.</p>
+      <label class="field"><span>Copied cells</span><textarea id="worksheetPasteInput" rows="11" placeholder="Email	Name	Company&#10;ada@example.com	Ada	Analytical Engines"></textarea></label>
+      <div class="field-grid two">
+        <label class="field"><span>Paste mode</span><select id="worksheetPasteMode"><option value="replace">Replace worksheet</option><option value="append">Append rows</option></select></label>
+        <label class="check-row worksheet-header-check"><input id="worksheetPasteHeaders" type="checkbox" checked><span>First pasted row contains column names</span></label>
+      </div>
+      <div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button type="button" class="button primary" id="applyWorksheetPasteButton">Apply paste</button></div>
+    </form>
+  </dialog>
   <dialog id="sheetViewerDialog" class="sheet-viewer-dialog">
     <div class="sheet-viewer-shell">
       <div class="sheet-viewer-head"><div><h2>Spreadsheet viewer</h2><p id="sheetViewerMeta">Inspect the loaded worksheet without changing it.</p></div><button type="button" class="button secondary small" id="closeSheetViewerButton">Close</button></div>

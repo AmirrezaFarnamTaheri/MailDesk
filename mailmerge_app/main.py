@@ -51,7 +51,7 @@ from .sheet_reader import SUPPORTED_EXTENSIONS, column_profiles, list_sheets, su
 from .storage import Store
 from .template_engine import batch_fingerprint, html_to_text, is_valid_email, message_fingerprint, render_text, split_addresses
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -206,6 +206,12 @@ class BrowserSenderPayload(BaseModel):
 class GoogleSheetImportRequest(BaseModel):
     account: str = Field(min_length=3, max_length=320)
     spreadsheet: str = Field(min_length=1, max_length=2_048)
+
+
+class WorksheetImportRequest(BaseModel):
+    name: str = Field(default="Recipients", min_length=1, max_length=120)
+    columns: list[str] = Field(min_length=1, max_length=200)
+    rows: list[list[str]] = Field(default_factory=list, max_length=10_000)
 
 
 class CampaignRequest(BaseModel):
@@ -382,6 +388,51 @@ async def import_sheet(file: UploadFile = File(...)) -> dict[str, Any]:
         "source_type": "file", "path": path, "snapshot_at": _utc_now(),
     }
     imports[import_id] = meta
+    return _public_import(meta)
+
+
+@app.post("/api/imports/worksheet")
+async def import_worksheet(payload: WorksheetImportRequest) -> dict[str, Any]:
+    """Create an in-app worksheet source without requiring an uploaded file."""
+    _prune_imports()
+    columns, rows = _normalize_worksheet_payload(payload.columns, payload.rows)
+    import_id = uuid.uuid4().hex
+    path = imports_dir() / f"{import_id}.csv"
+    _write_worksheet_csv(path, columns, rows)
+    meta = {
+        "import_id": import_id,
+        "filename": f"{_safe_worksheet_name(payload.name)}.csv",
+        "size": path.stat().st_size,
+        "sheets": ["Worksheet"],
+        "source_type": "worksheet",
+        "path": path,
+        "snapshot_at": _utc_now(),
+        "worksheet_name": _safe_worksheet_name(payload.name),
+        "worksheet_columns": len(columns),
+        "worksheet_rows": len(rows),
+    }
+    imports[import_id] = meta
+    return _public_import(meta)
+
+
+@app.put("/api/imports/{import_id}/worksheet")
+async def update_worksheet(import_id: str, payload: WorksheetImportRequest) -> dict[str, Any]:
+    """Replace the current contents of a built-in worksheet import."""
+    meta = _import_meta(import_id)
+    if meta.get("source_type") != "worksheet":
+        raise HTTPException(409, "Only built-in worksheet sources can be updated here.")
+    columns, rows = _normalize_worksheet_payload(payload.columns, payload.rows)
+    path = Path(meta["path"])
+    _write_worksheet_csv(path, columns, rows)
+    meta.update({
+        "filename": f"{_safe_worksheet_name(payload.name)}.csv",
+        "size": path.stat().st_size,
+        "sheets": ["Worksheet"],
+        "snapshot_at": _utc_now(),
+        "worksheet_name": _safe_worksheet_name(payload.name),
+        "worksheet_columns": len(columns),
+        "worksheet_rows": len(rows),
+    })
     return _public_import(meta)
 
 
@@ -1605,6 +1656,60 @@ def _normalize_schedule(value: str) -> str:
     if parsed <= datetime.now(timezone.utc) + timedelta(seconds=5):
         raise HTTPException(400, "Scheduled time must be at least 5 seconds in the future.")
     return parsed.isoformat(timespec="seconds")
+
+
+def _safe_worksheet_name(value: str) -> str:
+    name = re.sub(r"[\x00-\x1f<>:\\/|?*]+", " ", str(value or "Recipients")).strip()
+    name = re.sub(r"\s+", " ", name)[:120].strip(" .")
+    return name or "Recipients"
+
+
+def _normalize_worksheet_payload(columns: list[str], rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in columns:
+        column = str(raw or "").strip()
+        if not column:
+            raise HTTPException(400, "Worksheet column names cannot be blank.")
+        if len(column) > 120:
+            raise HTTPException(400, "Worksheet column names must be 120 characters or fewer.")
+        if column.casefold() == "_row":
+            raise HTTPException(400, '"_row" is reserved for MailDesk row numbering.')
+        key = column.casefold()
+        if key in seen:
+            raise HTTPException(400, f"Worksheet column names must be unique: {column}")
+        seen.add(key)
+        cleaned.append(column)
+    if not cleaned:
+        raise HTTPException(400, "Add at least one worksheet column.")
+    if len(rows) > 10_000:
+        raise HTTPException(400, "Built-in worksheets are limited to 10,000 rows. Use an uploaded spreadsheet for larger lists.")
+    normalized: list[list[str]] = []
+    cell_count = 0
+    for row_index, row in enumerate(rows, start=1):
+        values = [str(value or "") for value in row[: len(cleaned)]]
+        if len(values) < len(cleaned):
+            values.extend([""] * (len(cleaned) - len(values)))
+        for value in values:
+            if len(value) > 32_000:
+                raise HTTPException(400, f"Worksheet row {row_index} contains a cell longer than 32,000 characters.")
+        cell_count += len(values)
+        if cell_count > 500_000:
+            raise HTTPException(400, "Built-in worksheet is too large. Use an uploaded spreadsheet for very large datasets.")
+        normalized.append(values)
+    return cleaned, normalized
+
+
+def _write_worksheet_csv(path: Path, columns: list[str], rows: list[list[str]]) -> None:
+    temp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with temp.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(columns)
+            writer.writerows(rows)
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _cleanup_orphan_import_files() -> None:

@@ -104,6 +104,13 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('Create ${count} Gmail draft', APP_JS)
         self.assertIn('`Send ${count} ${plural}`', APP_JS)
 
+    def test_builtin_worksheet_and_quick_placeholder_insertion_are_wired(self):
+        for token in ("worksheetSourcePane", "manualWorksheetName", "manualWorksheetColumnName", "worksheetPasteInput", "applyWorksheetButton"):
+            self.assertIn(f'id="{token}"', INDEX_HTML)
+        self.assertIn("/api/imports/worksheet", APP_JS)
+        self.assertIn("function applyManualWorksheet", APP_JS)
+        self.assertIn("Built-in worksheet", INDEX_HTML)
+
     def test_guided_placeholder_builder_covers_source_fallback_and_insertion(self):
         for token in ('placeholderNameInput', 'placeholderSourceSelect', 'placeholderFallbackInput', 'placeholderTokenPreview', 'placeholderSamplePreview', 'placeholderInsertTarget', 'insertPlaceholderButton', 'insertConditionalButton', 'placeholderMappingSummary'):
             self.assertIn(f'id="{token}"', INDEX_HTML)

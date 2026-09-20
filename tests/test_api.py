@@ -80,6 +80,51 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(body["total"],2); self.assertEqual(body["valid"],1); self.assertEqual(body["invalid"],1)
         self.assertTrue(body["batch_id"])
 
+    def test_builtin_worksheet_can_be_created_previewed_rendered_and_updated(self):
+        created = self.client.post("/api/imports/worksheet", json={
+            "name": "Outreach",
+            "columns": ["Email", "First Name", "Company"],
+            "rows": [["ada@example.com", "Ada", "Analytical Engines"], ["lin@example.com", "Lin", "Labs"]],
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        source = created.json()
+        self.assertEqual(source["source_type"], "worksheet")
+        self.assertEqual(source["worksheet_columns"], 3)
+        self.assertEqual(source["worksheet_rows"], 2)
+
+        preview = self.client.get(f"/api/imports/{source['import_id']}/preview", params={"sheet": "Worksheet"})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        data = preview.json()
+        self.assertEqual(data["headers"], ["Email", "First Name", "Company"])
+        self.assertEqual(data["suggestions"]["to"], "Email")
+
+        rendered = self.client.post("/api/render", json={
+            "import_id": source["import_id"], "sheet": "Worksheet", "to_column": "Email", "name_column": "First Name",
+            "subject": "Hello {{FirstName}}", "body": "Company: {{Company}}", "body_html": "", "signature_html": "",
+            "cc_template": "", "bcc_template": "", "attachment_ids": [], "selected_rows": None, "limit": 0, "trim_values": True,
+            "placeholder_mappings": {"FirstName": "First Name", "Company": "Company"},
+        })
+        self.assertEqual(rendered.status_code, 200, rendered.text)
+        messages = rendered.json()["messages"]
+        self.assertEqual(messages[0]["subject"], "Hello Ada")
+        self.assertIn("Analytical Engines", messages[0]["body"])
+
+        updated = self.client.put(f"/api/imports/{source['import_id']}/worksheet", json={
+            "name": "Outreach",
+            "columns": ["Email", "First Name", "Company", "Role"],
+            "rows": [["grace@example.com", "Grace", "Navy", "Admiral"]],
+        })
+        self.assertEqual(updated.status_code, 200, updated.text)
+        refreshed = self.client.get(f"/api/imports/{source['import_id']}/preview", params={"sheet": "Worksheet"}).json()
+        self.assertEqual(refreshed["headers"], ["Email", "First Name", "Company", "Role"])
+        self.assertEqual(refreshed["rows"][0]["Role"], "Admiral")
+
+    def test_builtin_worksheet_rejects_duplicate_or_reserved_columns(self):
+        duplicate = self.client.post("/api/imports/worksheet", json={"name": "Bad", "columns": ["Email", "email"], "rows": []})
+        self.assertEqual(duplicate.status_code, 400, duplicate.text)
+        reserved = self.client.post("/api/imports/worksheet", json={"name": "Bad", "columns": ["_row"], "rows": []})
+        self.assertEqual(reserved.status_code, 400, reserved.text)
+
     def test_sheet_viewer_rows_support_search_and_paging(self):
         upload = self.client.post("/api/imports", files={"file": ("valid.xlsx", self._valid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}).json()
         response = self.client.get(f"/api/imports/{upload['import_id']}/rows", params={"sheet":"Contacts","limit":1,"offset":0,"q":"lin"})

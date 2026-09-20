@@ -2,7 +2,7 @@
 
 MailDesk is a **local-first desktop mail-merge application** for preparing reusable email templates, filling them from Excel/CSV/Google Sheets, reviewing every generated message, and then creating browser drafts, Gmail API drafts, or sending through Gmail.
 
-Version: **0.3.1**
+Version: **0.4.0**
 
 ## What changed in 0.3
 
@@ -261,3 +261,7 @@ The suite covers template safety, Unicode/RTL, spreadsheet parsing, mapping sugg
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/USER-GUIDE.md](docs/USER-GUIDE.md).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
