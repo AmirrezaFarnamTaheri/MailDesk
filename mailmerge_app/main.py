@@ -225,7 +225,7 @@ class CampaignRequest(BaseModel):
     skip_duplicates: bool = True
     throttle_ms: int = Field(default=750, ge=0, le=60_000)
     scheduled_at: str = Field(default="", max_length=80)
-    confirm_text: str = Field(default="", max_length=200)
+    send_confirmed: bool = False
 
 
 class SettingsPayload(BaseModel):
@@ -847,9 +847,8 @@ async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
         raise HTTPException(409, "Messages changed. Check the current messages again before processing.")
 
     if payload.mode == "send":
-        expected = f"SEND {len(payload.messages)}"
-        if payload.confirm_text.strip() != expected:
-            raise HTTPException(400, f"Sending requires typing exactly: {expected}")
+        if not payload.send_confirmed:
+            raise HTTPException(400, "Confirm sending in the MailDesk confirmation dialog.")
         if not payload.account:
             raise HTTPException(400, "Select a connected Gmail account.")
     elif payload.mode == "draft" and not payload.account:

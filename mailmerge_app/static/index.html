@@ -265,7 +265,6 @@
 
                   <div class="send-divider"></div>
                   <div class="final-summary" id="finalSummary"></div>
-                  <div id="sendConfirmation" class="send-confirmation is-hidden"><label class="field"><span>To send now, type the confirmation below</span><input id="confirmText" type="text" autocomplete="off"><code id="expectedConfirm"></code></label></div>
                   <div class="final-actions"><button class="button secondary" id="exportReviewButton">Export preview CSV</button><button class="button primary large" id="queueCampaignButton" disabled>Continue</button></div>
                 </div>
               </div>
@@ -378,6 +377,14 @@
         <label class="check-row worksheet-header-check"><input id="worksheetPasteHeaders" type="checkbox" checked><span>First pasted row contains column names</span></label>
       </div>
       <div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button type="button" class="button primary" id="applyWorksheetPasteButton">Apply paste</button></div>
+    </form>
+  </dialog>
+  <dialog id="sendConfirmDialog" class="modal" aria-labelledby="sendConfirmTitle">
+    <form method="dialog">
+      <h2 id="sendConfirmTitle">Confirm email delivery</h2>
+      <p class="modal-copy" id="sendConfirmSummary">Review the delivery details before sending.</p>
+      <div class="callout warning">This sends real email through the selected Gmail account. It cannot be undone from MailDesk.</div>
+      <div class="button-row modal-actions"><button type="submit" class="button secondary">Cancel</button><button type="button" class="button danger" id="confirmSendButton">Send emails</button></div>
     </form>
   </dialog>
   <dialog id="sheetViewerDialog" class="sheet-viewer-dialog">

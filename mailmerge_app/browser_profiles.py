@@ -186,10 +186,17 @@ def compose_url(
 def launch_url(profile: dict[str, object], url: str) -> None:
     executable = str(profile["executable"])
     profile_dir = str(profile["profile_dir"])
+    user_data = str(profile.get("user_data") or "")
     if not url.startswith("https://mail.google.com/mail/u/"):
         raise ValueError("Browser senders may only open Gmail URLs.")
+    if not Path(executable).is_file():
+        raise ValueError("The selected browser executable is no longer available. Rescan browsers and select a working profile.")
+    if not user_data or not Path(user_data).is_dir():
+        raise ValueError("The selected browser user-data folder is no longer available. Rescan browsers and select a working profile.")
+    if not _safe_profile_dir(Path(user_data), profile_dir):
+        raise ValueError("The selected browser profile is no longer available. Rescan browsers and select a working profile.")
     subprocess.Popen(
-        [executable, f"--profile-directory={profile_dir}", url],
+        [executable, f"--user-data-dir={user_data}", f"--profile-directory={profile_dir}", url],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=platform.system() != "Windows",

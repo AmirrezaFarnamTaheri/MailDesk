@@ -54,7 +54,7 @@ Choose one delivery action:
 - **Save drafts to Gmail** — create drafts through a connected Gmail account.
 - **Send emails** — send through a connected Gmail account.
 
-Campaign name, schedule, pacing and duplicate handling are optional. Scheduled work requires MailDesk and the computer to remain running. Live sending requires one typed confirmation: `SEND N`, where `N` is the number of messages.
+Campaign name, schedule, pacing and duplicate handling are optional. Scheduled work requires MailDesk and the computer to remain running. Live sending opens a confirmation dialog that names the selected account and recipient count; choose **Send emails** there to proceed.
 
 ### Choose the right delivery path
 
@@ -91,6 +91,8 @@ If the saved Desktop OAuth client becomes invalid or is replaced, choose **Use a
 ## Browser accounts
 
 Open **Accounts → Browser accounts** and choose a browser profile. MailDesk reads that profile and, when Chromium has cached the signed-in Google session, lists Gmail accounts in browser order so the account index and email can be filled automatically. Click **Rescan browsers** after signing in or changing accounts; manual account-index/email entry remains available as a fallback.
+
+Browser drafts are optional. If MailDesk cannot detect a compatible Chrome, Edge, or Brave profile—or its executable/user-data folder moved—**Open drafts in Gmail** stays unavailable until you rescan and select a working profile. Use **Save drafts to Gmail** or **Send emails** with a connected Gmail API account instead. MailDesk never falls back to a different browser or a fresh profile: it launches the exact browser executable, user-data folder, and profile you selected.
 
 ```text
 Chrome · Profile 1 · account 0 · personal@example.com

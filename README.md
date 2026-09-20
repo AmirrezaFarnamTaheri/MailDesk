@@ -157,15 +157,9 @@ For a scheduled **browser** campaign, account verification may expire before exe
 
 ## Real-send confirmation
 
-For `N` messages, live sending requires:
+For `N` messages, live sending requires a confirmation dialog that shows the recipient count and selected Gmail account. Choose **Send emails** in that dialog to continue; cancelling leaves the campaign unchanged.
 
-1. zero blocking validation errors;
-2. a connected Gmail account;
-3. typing:
-
-```text
-SEND N
-```
+Live sending still requires zero blocking validation errors and a connected Gmail account.
 
 MailDesk still verifies the rendered batch internally before processing it; the internal fingerprint is not exposed as a user confirmation step.
 
