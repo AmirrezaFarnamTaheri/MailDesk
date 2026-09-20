@@ -285,6 +285,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(status.status_code, 200)
         payload = status.json()
         self.assertEqual(payload["oauth_version"], "2.0")
+        self.assertEqual(payload["oauth_profile"], "2.1-compatible")
         self.assertTrue(payload["pkce"])
         self.assertEqual(payload["redirect_mode"], "loopback")
 
@@ -344,6 +345,19 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("other@example.com", response.text)
         self.assertIn("expected@example.com", response.text)
         self.assertIsNone(self.main.store.get_account("other@example.com"))
+
+    def test_google_callback_notifies_only_the_known_local_opener(self):
+        state = "cancelled-state"
+        self.main.oauth_sessions[state] = {
+            "state": state,
+            "redirect_uri": "http://127.0.0.1:8765/oauth/google/callback",
+            "created": time.time(),
+        }
+        response = self.client.get("/oauth/google/callback", params={"state": state, "error": "access_denied"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("maildesk-google-oauth-complete", response.text)
+        self.assertIn('"http://127.0.0.1:8765"', response.text)
+        self.assertNotIn("window.opener.postMessage", self.main._oauth_page(False, "no opener").body.decode())
 
     def test_google_connection_check_returns_non_secret_health(self):
         token = {"access_token": "access-secret", "refresh_token": "refresh-secret", "scope": self.main.GMAIL_SCOPE, "expires_at": "2999-01-01T00:00:00+00:00"}

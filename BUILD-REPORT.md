@@ -7,7 +7,7 @@
 | Desktop shell | Done | pywebview desktop shell, loopback FastAPI service, single-instance lock, packaging and installer workflow |
 | Guided templates | Done | reusable templates, spreadsheet-field insertion, fallback values, mapping health, unsaved-change protection, duplication and live sample recipient preview |
 | Spreadsheet workflow | Done | XLSX/CSV/Google Sheets snapshots, header detection, mappings, filters, row selection and preview |
-| Gmail OAuth | Done | OAuth 2.0 authorization-code + PKCE (S256), canonical 127.0.0.1 loopback callback, single-use bounded state sessions, encrypted per-account tokens/clients, reusable encrypted Desktop OAuth client, token refresh/rotation, account health checks, reconnect identity binding and explicit revoke endpoint |
+| Gmail OAuth | Done | OAuth 2.1-compatible authorization code + PKCE (S256), canonical 127.0.0.1 loopback callback, local-browser sign-in popup handoff, single-use bounded state sessions, encrypted per-account tokens/clients, reusable encrypted Desktop OAuth client, token refresh/rotation, account health checks, reconnect identity binding and explicit revoke endpoint |
 | Browser senders | Done | Chromium profile/account discovery, `/u/N/` routing and time-bounded human verification |
 | Gmail delivery | Done | Gmail API draft/send, MIME HTML/attachments/CID images, exact-account verification and uncertain-outcome handling |
 | Queue/scheduling | Done | durable queue, pause/resume/cancel/retry, scheduling, restart-to-paused recovery and duplicate protection |
@@ -31,7 +31,7 @@ Key outcomes:
 
 ## Verification performed
 
-- `pytest -q` — **127 passed**.
+- `pytest -q` — **128 passed**.
 - `python -m compileall -q mailmerge_app` — passed.
 - `node --check mailmerge_app/static/app.js` — passed.
 - `python scripts/visual_review_e2e.py` — passed against a running local application; the review image is written to `artifacts/visual-review/senders.png`.

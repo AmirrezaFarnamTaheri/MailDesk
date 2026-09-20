@@ -56,10 +56,12 @@ The supplied project targets Python 2 and includes username/password IMAP login 
 
 This keeps the useful OAuth engineering from the references while avoiding dead code, duplicate proxy stacks, legacy password auth, and unnecessary Gmail permission expansion.
 
-## OAuth 2.0 hardening in 0.3.1
+## OAuth 2.1-compatible desktop authorization
 
-MailDesk uses the installed/desktop-app **OAuth 2.0 authorization-code flow with PKCE (S256)**. The browser is the external user agent and the authorization response returns to MailDesk over a loopback callback. The callback URI is built from the actual local listener and forced to the `127.0.0.1` loopback IP instead of trusting the HTTP `Host` header.
+MailDesk uses the installed/desktop-app **OAuth 2.0 authorization-code flow with PKCE (S256)**, following the OAuth 2.1 profile. It supports neither the implicit grant nor password-style grants. The browser is the external user agent and the authorization response returns to MailDesk over a loopback callback. The callback URI is built from the actual local listener and forced to the `127.0.0.1` loopback IP instead of trusting the HTTP `Host` header.
 
 Authorization state is random, short-lived, single-use, and kept only in memory. Pending sessions are bounded so abandoned login attempts cannot grow memory without limit. OAuth callback responses are marked `no-store`. Token responses must contain a usable Bearer access token and positive expiry; refresh-token rotation continues to be preserved.
+
+The desktop app opens a named, dedicated sign-in popup synchronously from the user gesture, then navigates it to Google. This lets Google reuse the account already signed in to the user's local browser while avoiding a pop-up blocker race. The completed loopback callback sends a result only to the exact known `127.0.0.1` opener origin; MailDesk refreshes connected accounts immediately and closes the popup. Closing the popup early produces a clear, non-destructive cancellation message.
 
 New Gmail connections request only `gmail.compose` by default. `spreadsheets.readonly` is an explicit opt-in when Google Sheets is needed. Reconnecting an account never silently drops a Sheets grant it already has.

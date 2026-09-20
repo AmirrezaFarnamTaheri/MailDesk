@@ -178,7 +178,9 @@ class FrontendIntegrityTests(unittest.TestCase):
 
     def test_oauth2_setup_is_explicit_and_sheets_scope_is_opt_in(self):
         self.assertIn('Google OAuth 2.0', INDEX_HTML)
-        self.assertIn('OAuth 2.0 setup', APP_JS)
+        self.assertIn('OAuth 2.1-compatible setup', APP_JS)
+        self.assertIn('maildesk-google-oauth-complete', APP_JS)
+        self.assertIn("window.addEventListener('message',handleGoogleOauthMessage)", APP_JS)
         sheets = re.search(r'<input id="includeSheetsScope"[^>]*>', INDEX_HTML)
         self.assertIsNotNone(sheets)
         self.assertNotIn('checked', sheets.group(0))

@@ -90,7 +90,7 @@ For Gmail API drafts/sends and Google Sheets:
 4. Create an OAuth Client ID of type **Desktop app**.
 5. Download its JSON.
 6. In **Senders → Gmail accounts**, choose **Set up & connect** and select the JSON once.
-7. Complete Google sign-in. MailDesk stores the Desktop client encrypted on this device, so later accounts can use **Connect Gmail** without selecting the JSON again.
+7. Complete Google sign-in in the dedicated popup. Google can reuse the account already signed in to your local browser; on completion MailDesk closes the popup and refreshes the sender list. MailDesk stores the Desktop client encrypted on this device, so later accounts can use **Connect Gmail** without selecting the JSON again.
 8. Leave read-only Google Sheets access enabled if you want Sheet snapshots.
 
 Each connected account now exposes **Check** and **Reconnect** actions. Reconnect is locked to the expected email address, so authorizing the wrong Google account cannot silently replace another sender. A local **Disconnect** only removes MailDesk's stored credential; the API also exposes explicit revocation when a full Google authorization revoke is required.
@@ -100,7 +100,7 @@ Scopes used:
 - Gmail compose: `https://www.googleapis.com/auth/gmail.compose`
 - Google Sheets read-only: `https://www.googleapis.com/auth/spreadsheets.readonly`
 
-MailDesk deliberately does **not** switch to legacy password authentication, embed an IMAP/SMTP proxy, request `https://mail.google.com/`, request general Gmail read access, or request Google Drive access. Gmail API delivery remains the default because it provides the app's required draft/send behavior with a narrower permission set.
+The desktop client follows the OAuth 2.1 profile: authorization code + PKCE (S256), a bounded single-use state, and the exact local loopback callback. It deliberately does **not** support implicit or password grants, switch to legacy password authentication, embed an IMAP/SMTP proxy, request `https://mail.google.com/`, request general Gmail read access, or request Google Drive access. Gmail API delivery remains the default because it provides the app's required draft/send behavior with a narrower permission set.
 
 See `docs/OAUTH-INTEGRATION.md` for how the supplied OAuth/Gmail reference projects were evaluated and integrated.
 

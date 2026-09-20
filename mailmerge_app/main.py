@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
@@ -757,22 +758,22 @@ async def google_callback(request: Request, code: str = "", state: str = "", err
         return _oauth_page(False, "Authorization session expired or could not be verified. Return to MailDesk and connect again.")
     if error:
         if error == "access_denied":
-            return _oauth_page(False, "Google authorization was cancelled or denied. No account was changed.")
+            return _oauth_page(False, "Google authorization was cancelled or denied. No account was changed.", _oauth_opener_origin(session))
         safe_error = re.sub(r"[^a-zA-Z0-9_.-]", "", error)[:80] or "authorization_error"
-        return _oauth_page(False, f"Google authorization failed: {safe_error}")
+        return _oauth_page(False, f"Google authorization failed: {safe_error}", _oauth_opener_origin(session))
     if not code:
-        return _oauth_page(False, "Google did not return an authorization code.")
+        return _oauth_page(False, "Google did not return an authorization code.", _oauth_opener_origin(session))
     try:
         token = await exchange_code(session["client"], code, session["verifier"], session["redirect_uri"])
         token["scope"] = token.get("scope") or session.get("requested_scopes", "")
         email_address = await profile_email(token)
         expected_email = str(session.get("expected_email") or "").strip()
         if expected_email and email_address.casefold() != expected_email.casefold():
-            return _oauth_page(False, f"Google connected {email_address}, but MailDesk was reconnecting {expected_email}. No account was changed.")
+            return _oauth_page(False, f"Google connected {email_address}, but MailDesk was reconnecting {expected_email}. No account was changed.", _oauth_opener_origin(session))
         store.save_account(email_address, token, session["client"])
-        return _oauth_page(True, f"Connected {email_address}. You can close this tab.")
+        return _oauth_page(True, f"Connected {email_address}. You can close this tab.", _oauth_opener_origin(session))
     except Exception as exc:
-        return _oauth_page(False, f"Could not connect Google: {_safe_error(exc)}")
+        return _oauth_page(False, f"Could not connect Google: {_safe_error(exc)}", _oauth_opener_origin(session))
 
 
 @app.delete("/api/accounts/{email}")
@@ -1457,15 +1458,15 @@ def _google_client_status() -> dict[str, Any]:
     try:
         info = store.get_oauth_client_info("google")
     except Exception:
-        return {"configured": False, "client_id_hint": "", "updated_at": "", "credential_error": "Saved OAuth client could not be read. Replace it with a fresh Desktop app JSON file.", "oauth_version": "2.0", "pkce": True, "redirect_mode": "loopback"}
+        return {"configured": False, "client_id_hint": "", "updated_at": "", "credential_error": "Saved OAuth client could not be read. Replace it with a fresh Desktop app JSON file.", "oauth_version": "2.0", "oauth_profile": "2.1-compatible", "pkce": True, "redirect_mode": "loopback"}
     if not info:
-        return {"configured": False, "client_id_hint": "", "updated_at": "", "credential_error": "", "oauth_version": "2.0", "pkce": True, "redirect_mode": "loopback"}
+        return {"configured": False, "client_id_hint": "", "updated_at": "", "credential_error": "", "oauth_version": "2.0", "oauth_profile": "2.1-compatible", "pkce": True, "redirect_mode": "loopback"}
     client_id = str(info["client"].get("client_id") or "")
     if len(client_id) > 28:
         hint = f"{client_id[:10]}…{client_id[-16:]}"
     else:
         hint = client_id
-    return {"configured": bool(client_id), "client_id_hint": hint, "updated_at": info["updated_at"], "credential_error": "", "oauth_version": "2.0", "pkce": True, "redirect_mode": "loopback"}
+    return {"configured": bool(client_id), "client_id_hint": hint, "updated_at": info["updated_at"], "credential_error": "", "oauth_version": "2.0", "oauth_profile": "2.1-compatible", "pkce": True, "redirect_mode": "loopback"}
 
 
 async def _read_google_oauth_client(upload: UploadFile) -> dict[str, str]:
@@ -1655,14 +1656,32 @@ def _require_campaign(campaign_id: str) -> dict[str, Any]:
     return campaign
 
 
-def _oauth_page(success: bool, message: str) -> HTMLResponse:
+def _oauth_page(success: bool, message: str, opener_origin: str = "") -> HTMLResponse:
     safe = html.escape(message, quote=True)
     icon = "✓" if success else "!"
+    notification = ""
+    if opener_origin:
+        payload = json.dumps({"type": "maildesk-google-oauth-complete", "success": success, "message": message}).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        notification = f"<script>if(window.opener&&!window.opener.closed)window.opener.postMessage({payload},{json.dumps(opener_origin)});</script>"
     return HTMLResponse(
         f"""<!doctype html><meta charset='utf-8'><title>MailDesk</title>
         <style>body{{font-family:system-ui;margin:0;display:grid;place-items:center;min-height:100vh;background:#f5f7fa;color:#17202a}}.card{{max-width:560px;background:white;border:1px solid #dfe5ec;border-radius:18px;padding:32px;box-shadow:0 16px 50px #15202b18}}.icon{{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:#e9f7ef;margin-bottom:18px;font-weight:800}}</style>
-        <div class='card'><div class='icon'>{icon}</div><h2>{'Connected' if success else 'Connection problem'}</h2><p>{safe}</p><p>You may close this tab and return to MailDesk.</p></div>"""
+        <div class='card'><div class='icon'>{icon}</div><h2>{'Connected' if success else 'Connection problem'}</h2><p>{safe}</p><p>You may close this tab and return to MailDesk.</p></div>{notification}"""
     )
+
+
+def _oauth_opener_origin(session: dict[str, Any] | None) -> str:
+    """Return only the known loopback origin used by an OAuth callback session."""
+
+    redirect_uri = str((session or {}).get("redirect_uri") or "")
+    parsed = urlsplit(redirect_uri)
+    try:
+        port = parsed.port
+    except ValueError:
+        return ""
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not port:
+        return ""
+    return f"http://127.0.0.1:{port}"
 
 
 def _oauth_redirect_uri(request: Request) -> str:
