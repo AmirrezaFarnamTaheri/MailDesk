@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
-import json
 import mimetypes
-import secrets
-from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Any, Iterable
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 import httpx
 
+from .oauth_client import (
+    GOOGLE_OAUTH,
+    exchange_authorization_code,
+    new_authorization_request,
+    parse_installed_client,
+    refresh_access_token,
+    revoke_access,
+    token_has_scope,
+    token_health,
+    token_is_valid,
+)
+
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
-AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 
@@ -32,102 +38,37 @@ class GoogleOutcomeUncertainError(httpx.TransportError):
 
 
 def parse_client_secret(document: bytes) -> dict[str, str]:
-    try:
-        parsed = json.loads(document.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("The OAuth client JSON is not valid JSON.") from exc
-    if "web" in parsed:
-        raise ValueError("Use a Google OAuth client of type Desktop app, not Web application.")
-    installed = parsed.get("installed")
-    if not isinstance(installed, dict) or not installed.get("client_id") or not installed.get("client_secret"):
-        raise ValueError("The file is not a valid Google Desktop app OAuth client JSON.")
-    return {"client_id": installed["client_id"], "client_secret": installed["client_secret"]}
+    return parse_installed_client(document, provider_name="Google")
 
 
 def new_oauth_request(
     client: dict[str, str],
     redirect_uri: str,
     scopes: Iterable[str] | None = None,
+    *,
+    login_hint: str = "",
+    prompt: str = "consent select_account",
 ) -> tuple[str, dict[str, str]]:
-    state = secrets.token_urlsafe(32)
-    verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
-    scope_list = list(scopes or [GMAIL_SCOPE])
-    query = urlencode(
-        {
-            "client_id": client["client_id"],
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(scope_list),
-            "access_type": "offline",
-            "prompt": "consent select_account",
-            "include_granted_scopes": "true",
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
+    return new_authorization_request(
+        GOOGLE_OAUTH,
+        client,
+        redirect_uri,
+        list(scopes or [GMAIL_SCOPE]),
+        login_hint=login_hint,
+        prompt=prompt,
     )
-    return f"{AUTH_URL}?{query}", {
-        "state": state,
-        "verifier": verifier,
-        "redirect_uri": redirect_uri,
-        "requested_scopes": " ".join(scope_list),
-    }
 
 
 async def exchange_code(client: dict[str, str], code: str, verifier: str, redirect_uri: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.post(
-            TOKEN_URL,
-            data={
-                "client_id": client["client_id"],
-                "client_secret": client["client_secret"],
-                "code": code,
-                "code_verifier": verifier,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
-        )
-        response.raise_for_status()
-        token = response.json()
-    if not isinstance(token, dict) or not token.get("access_token"):
-        raise RuntimeError("Google token exchange returned an invalid response.")
-    try:
-        lifetime = int(token.get("expires_in", 3600))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("Google token exchange returned an invalid expiry.") from exc
-    token["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=max(0, lifetime - 60))).isoformat()
-    return token
+    return await exchange_authorization_code(GOOGLE_OAUTH, client, code, verifier, redirect_uri)
 
 
 async def refresh_token(token: dict[str, Any], client: dict[str, str]) -> dict[str, Any]:
-    if token_is_valid(token):
-        return token
-    refresh = token.get("refresh_token")
-    if not refresh:
-        raise RuntimeError("This Google account has no refresh token. Reconnect the account.")
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.post(
-            TOKEN_URL,
-            data={
-                "client_id": client["client_id"],
-                "client_secret": client["client_secret"],
-                "refresh_token": refresh,
-                "grant_type": "refresh_token",
-            },
-        )
-        response.raise_for_status()
-        updated = response.json()
-    if not isinstance(updated, dict) or not updated.get("access_token"):
-        raise RuntimeError("Google token refresh returned an invalid response.")
-    try:
-        lifetime = int(updated.get("expires_in", 3600))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("Google token refresh returned an invalid expiry.") from exc
-    updated["refresh_token"] = refresh
-    updated["scope"] = updated.get("scope") or token.get("scope", "")
-    updated["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=max(0, lifetime - 60))).isoformat()
-    return updated
+    return await refresh_access_token(GOOGLE_OAUTH, token, client)
+
+
+async def revoke_token(token: dict[str, Any]) -> None:
+    await revoke_access(GOOGLE_OAUTH, token)
 
 
 async def profile_email(token: dict[str, Any]) -> str:
@@ -139,25 +80,6 @@ async def profile_email(token: dict[str, Any]) -> str:
         if not isinstance(email_address, str) or not email_address.strip():
             raise RuntimeError("Google Gmail profile response did not include an email address.")
         return email_address.strip()
-
-
-def token_has_scope(token: dict[str, Any], scope: str) -> bool:
-    scopes = str(token.get("scope") or "").split()
-    return scope in scopes
-
-
-def token_is_valid(token: dict[str, Any], *, margin_seconds: int = 30) -> bool:
-    """Return whether an access token remains usable beyond the safety margin."""
-    value = token.get("expires_at")
-    if not value or not token.get("access_token"):
-        return False
-    try:
-        expires_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        return expires_at > datetime.now(timezone.utc) + timedelta(seconds=max(0, margin_seconds))
-    except (ValueError, TypeError, OverflowError):
-        return False
 
 
 def build_raw_message(

@@ -80,6 +80,51 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(body["total"],2); self.assertEqual(body["valid"],1); self.assertEqual(body["invalid"],1)
         self.assertTrue(body["batch_id"])
 
+    def test_builtin_worksheet_can_be_created_previewed_rendered_and_updated(self):
+        created = self.client.post("/api/imports/worksheet", json={
+            "name": "Outreach",
+            "columns": ["Email", "First Name", "Company"],
+            "rows": [["ada@example.com", "Ada", "Analytical Engines"], ["lin@example.com", "Lin", "Labs"]],
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        source = created.json()
+        self.assertEqual(source["source_type"], "worksheet")
+        self.assertEqual(source["worksheet_columns"], 3)
+        self.assertEqual(source["worksheet_rows"], 2)
+
+        preview = self.client.get(f"/api/imports/{source['import_id']}/preview", params={"sheet": "Worksheet"})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        data = preview.json()
+        self.assertEqual(data["headers"], ["Email", "First Name", "Company"])
+        self.assertEqual(data["suggestions"]["to"], "Email")
+
+        rendered = self.client.post("/api/render", json={
+            "import_id": source["import_id"], "sheet": "Worksheet", "to_column": "Email", "name_column": "First Name",
+            "subject": "Hello {{FirstName}}", "body": "Company: {{Company}}", "body_html": "", "signature_html": "",
+            "cc_template": "", "bcc_template": "", "attachment_ids": [], "selected_rows": None, "limit": 0, "trim_values": True,
+            "placeholder_mappings": {"FirstName": "First Name", "Company": "Company"},
+        })
+        self.assertEqual(rendered.status_code, 200, rendered.text)
+        messages = rendered.json()["messages"]
+        self.assertEqual(messages[0]["subject"], "Hello Ada")
+        self.assertIn("Analytical Engines", messages[0]["body"])
+
+        updated = self.client.put(f"/api/imports/{source['import_id']}/worksheet", json={
+            "name": "Outreach",
+            "columns": ["Email", "First Name", "Company", "Role"],
+            "rows": [["grace@example.com", "Grace", "Navy", "Admiral"]],
+        })
+        self.assertEqual(updated.status_code, 200, updated.text)
+        refreshed = self.client.get(f"/api/imports/{source['import_id']}/preview", params={"sheet": "Worksheet"}).json()
+        self.assertEqual(refreshed["headers"], ["Email", "First Name", "Company", "Role"])
+        self.assertEqual(refreshed["rows"][0]["Role"], "Admiral")
+
+    def test_builtin_worksheet_rejects_duplicate_or_reserved_columns(self):
+        duplicate = self.client.post("/api/imports/worksheet", json={"name": "Bad", "columns": ["Email", "email"], "rows": []})
+        self.assertEqual(duplicate.status_code, 400, duplicate.text)
+        reserved = self.client.post("/api/imports/worksheet", json={"name": "Bad", "columns": ["_row"], "rows": []})
+        self.assertEqual(reserved.status_code, 400, reserved.text)
+
     def test_sheet_viewer_rows_support_search_and_paging(self):
         upload = self.client.post("/api/imports", files={"file": ("valid.xlsx", self._valid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}).json()
         response = self.client.get(f"/api/imports/{upload['import_id']}/rows", params={"sheet":"Contacts","limit":1,"offset":0,"q":"lin"})
@@ -225,6 +270,150 @@ class ApiFlowTests(unittest.TestCase):
         response = self.client.post('/api/attachments', files={"file": (long_name, b"hello", "text/plain")})
         self.assertEqual(response.status_code, 400, response.text)
         self.assertIn("filename is invalid or too long", response.json()["detail"])
+
+
+
+
+    def test_oauth_redirect_uses_actual_loopback_listener_not_host_header(self):
+        from starlette.requests import Request
+
+        request = Request({
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/accounts/google/start",
+            "raw_path": b"/api/accounts/google/start",
+            "query_string": b"",
+            "headers": [(b"host", b"localhost:9999")],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8765),
+        })
+        self.assertEqual(
+            self.main._oauth_redirect_uri(request),
+            "http://127.0.0.1:8765/oauth/google/callback",
+        )
+
+    def test_oauth_callback_error_requires_and_consumes_valid_state(self):
+        missing = self.client.get("/oauth/google/callback", params={"error": "access_denied", "state": "missing"})
+        self.assertEqual(missing.status_code, 200)
+        self.assertIn("could not be verified", missing.text)
+
+        state = "cancelled-state"
+        self.main.oauth_sessions[state] = {
+            "state": state,
+            "verifier": "verifier",
+            "redirect_uri": "http://testserver/oauth/google/callback",
+            "requested_scopes": self.main.GMAIL_SCOPE,
+            "client": {"client_id": "client"},
+            "created": time.time(),
+            "expected_email": "",
+        }
+        cancelled = self.client.get("/oauth/google/callback", params={"error": "access_denied", "state": state})
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertIn("cancelled or denied", cancelled.text)
+        self.assertNotIn(state, self.main.oauth_sessions)
+        self.assertEqual(cancelled.headers.get("cache-control"), "no-store, max-age=0")
+
+    def test_oauth_sessions_are_bounded(self):
+        self.main.oauth_sessions.clear()
+        now = time.time()
+        for index in range(self.main.OAUTH_SESSION_MAX + 7):
+            self.main.oauth_sessions[f"state-{index}"] = {"created": now + index}
+        self.main._prune_oauth_sessions()
+        self.assertEqual(len(self.main.oauth_sessions), self.main.OAUTH_SESSION_MAX)
+        self.assertNotIn("state-0", self.main.oauth_sessions)
+        self.assertIn(f"state-{self.main.OAUTH_SESSION_MAX + 6}", self.main.oauth_sessions)
+
+    def test_oauth_client_status_describes_oauth2_pkce_loopback(self):
+        status = self.client.get("/api/oauth/google/client")
+        self.assertEqual(status.status_code, 200)
+        payload = status.json()
+        self.assertEqual(payload["oauth_version"], "2.0")
+        self.assertEqual(payload["oauth_profile"], "2.1-compatible")
+        self.assertTrue(payload["pkce"])
+        self.assertEqual(payload["redirect_mode"], "loopback")
+
+    def test_google_oauth_client_is_saved_once_and_reused_for_new_connections(self):
+        document = b'{"installed":{"client_id":"saved-client","client_secret":"saved-secret"}}'
+        saved = self.client.post(
+            "/api/oauth/google/client",
+            files={"client_secret": ("client.json", document, "application/json")},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()["configured"])
+        self.assertNotIn("saved-secret", saved.text)
+
+        started = self.client.post(
+            "/api/accounts/google/start",
+            data={"include_sheets": "false"},
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertIn("accounts.google.com", started.json()["auth_url"])
+        session = next(reversed(self.main.oauth_sessions.values()))
+        self.assertEqual(session["client"]["client_id"], "saved-client")
+        self.assertNotIn(self.main.SHEETS_SCOPE, session["requested_scopes"])
+
+    def test_google_reconnect_locks_callback_to_the_requested_account(self):
+        client = {"client_id": "saved-client", "client_secret": "saved-secret"}
+        token = {
+            "access_token": "old-access",
+            "refresh_token": "refresh",
+            "scope": f"{self.main.GMAIL_SCOPE} {self.main.SHEETS_SCOPE}",
+            "expires_at": "2999-01-01T00:00:00+00:00",
+        }
+        self.main.store.save_account("expected@example.com", token, client)
+        response = self.client.post(
+            "/api/accounts/expected@example.com/reconnect",
+            data={"include_sheets": "false"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        session = next(reversed(self.main.oauth_sessions.values()))
+        self.assertEqual(session["expected_email"], "expected@example.com")
+        self.assertIn(self.main.SHEETS_SCOPE, session["requested_scopes"], "reconnect must not silently drop an existing Sheets grant")
+
+    def test_google_callback_rejects_a_different_account_during_reconnect(self):
+        state = "reconnect-state"
+        self.main.oauth_sessions[state] = {
+            "state": state,
+            "verifier": "verifier",
+            "redirect_uri": "http://testserver/oauth/google/callback",
+            "requested_scopes": self.main.GMAIL_SCOPE,
+            "client": {"client_id": "client", "client_secret": "secret"},
+            "created": time.time(),
+            "expected_email": "expected@example.com",
+        }
+        fake_token = {"access_token": "access", "refresh_token": "refresh", "scope": self.main.GMAIL_SCOPE, "expires_at": "2999-01-01T00:00:00+00:00"}
+        with unittest.mock.patch.object(self.main, "exchange_code", new=unittest.mock.AsyncMock(return_value=fake_token)), unittest.mock.patch.object(self.main, "profile_email", new=unittest.mock.AsyncMock(return_value="other@example.com")):
+            response = self.client.get("/oauth/google/callback", params={"state": state, "code": "code"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("other@example.com", response.text)
+        self.assertIn("expected@example.com", response.text)
+        self.assertIsNone(self.main.store.get_account("other@example.com"))
+
+    def test_google_callback_notifies_only_the_known_local_opener(self):
+        state = "cancelled-state"
+        self.main.oauth_sessions[state] = {
+            "state": state,
+            "redirect_uri": "http://127.0.0.1:8765/oauth/google/callback",
+            "created": time.time(),
+        }
+        response = self.client.get("/oauth/google/callback", params={"state": state, "error": "access_denied"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("maildesk-google-oauth-complete", response.text)
+        self.assertIn('"http://127.0.0.1:8765"', response.text)
+        self.assertNotIn("window.opener.postMessage", self.main._oauth_page(False, "no opener").body.decode())
+
+    def test_google_connection_check_returns_non_secret_health(self):
+        token = {"access_token": "access-secret", "refresh_token": "refresh-secret", "scope": self.main.GMAIL_SCOPE, "expires_at": "2999-01-01T00:00:00+00:00"}
+        with unittest.mock.patch.object(self.main, "_verified_google_account", new=unittest.mock.AsyncMock(return_value=(token, "healthy@example.com"))):
+            response = self.client.post("/api/accounts/healthy@example.com/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["gmail"])
+        self.assertTrue(payload["refresh_available"])
+        self.assertNotIn("access-secret", response.text)
+        self.assertNotIn("refresh-secret", response.text)
 
     def test_oversized_oauth_client_is_rejected_instead_of_truncated(self):
         response = self.client.post(

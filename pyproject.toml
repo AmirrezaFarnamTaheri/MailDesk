@@ -1,7 +1,8 @@
 [project]
 name = "maildesk"
-version = "0.2.1"
+version = "0.4.0"
 description = "Local-first spreadsheet mail merge desktop application with reusable templates, Gmail drafts/sending, browser Gmail slots, queues, and Google Sheets snapshots."
+license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1",

@@ -189,6 +189,11 @@ class Store:
                     encrypted_client TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS oauth_clients (
+                    provider TEXT PRIMARY KEY COLLATE NOCASE,
+                    encrypted_client TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS operations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp_utc TEXT NOT NULL,
@@ -362,6 +367,25 @@ class Store:
                     skipped=(SELECT COUNT(*) FROM queue_items qi WHERE qi.campaign_id=campaigns.id AND qi.status='Skipped')
                 """
             )
+            # A process can stop after Gmail accepts a send/draft but before the
+            # response is persisted. Never make that item replayable on restart.
+            restart_error = "Gmail operation was in flight during application restart; inspect Gmail before resolving this item."
+            affected_campaign_ids = [
+                row["campaign_id"]
+                for row in db.execute(
+                    "SELECT DISTINCT campaign_id FROM queue_items WHERE status='InFlight'"
+                ).fetchall()
+            ]
+            db.execute(
+                "UPDATE queue_items SET status='NeedsReview',error=?,updated_at=? WHERE status='InFlight'",
+                (restart_error, _utc_now()),
+            )
+            if affected_campaign_ids:
+                placeholders = ",".join("?" for _ in affected_campaign_ids)
+                db.execute(
+                    f"UPDATE campaigns SET status='Paused',completed_at='',last_error=? WHERE id IN ({placeholders})",
+                    (restart_error, *affected_campaign_ids),
+                )
             self._recover_operation_outbox(db)
             self._seed(db)
             # Queued/Running work belonged to the previous process's event loop.
@@ -519,6 +543,37 @@ class Store:
     def delete_snippet(self, snippet_id: str) -> None:
         with self._db() as db:
             db.execute("DELETE FROM snippets WHERE id=?", (snippet_id,))
+
+    # ---------- reusable OAuth clients ----------
+    def save_oauth_client(self, provider: str, client: dict[str, Any]) -> None:
+        provider_key = provider.strip().lower()
+        if not provider_key:
+            raise ValueError("OAuth provider key is required.")
+        with self._db() as db:
+            db.execute(
+                """INSERT INTO oauth_clients(provider, encrypted_client, updated_at)
+                   VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET encrypted_client=excluded.encrypted_client, updated_at=excluded.updated_at""",
+                (provider_key, self.secrets.encrypt(client), _utc_now()),
+            )
+
+    def get_oauth_client(self, provider: str) -> dict[str, Any] | None:
+        provider_key = provider.strip().lower()
+        with self._db() as db:
+            row = db.execute("SELECT encrypted_client FROM oauth_clients WHERE provider=? COLLATE NOCASE", (provider_key,)).fetchone()
+        return self.secrets.decrypt(row["encrypted_client"]) if row else None
+
+    def get_oauth_client_info(self, provider: str) -> dict[str, Any] | None:
+        provider_key = provider.strip().lower()
+        with self._db() as db:
+            row = db.execute("SELECT provider, encrypted_client, updated_at FROM oauth_clients WHERE provider=? COLLATE NOCASE", (provider_key,)).fetchone()
+        if not row:
+            return None
+        client = self.secrets.decrypt(row["encrypted_client"])
+        return {"provider": row["provider"], "updated_at": row["updated_at"], "client": client}
+
+    def delete_oauth_client(self, provider: str) -> None:
+        with self._db() as db:
+            db.execute("DELETE FROM oauth_clients WHERE provider=? COLLATE NOCASE", (provider.strip().lower(),))
 
     # ---------- Google accounts ----------
     def save_account(self, email: str, token: dict[str, Any], client: dict[str, Any]) -> None:
@@ -778,7 +833,7 @@ class Store:
                         (campaign_id,),
                     ).fetchall()
                 }
-                unfinished = counts.get("Pending", 0) + counts.get("Retry", 0) + counts.get("NeedsReview", 0)
+                unfinished = counts.get("Pending", 0) + counts.get("Retry", 0) + counts.get("InFlight", 0) + counts.get("NeedsReview", 0)
                 if counts and unfinished == 0:
                     status = "CompletedWithErrors" if counts.get("Failed", 0) else "Completed"
                     if status == "Completed":
