@@ -51,6 +51,7 @@ backups/
 logs/
 attachments/
 imports/
+artifacts/
 
 # Credentials & secrets
 client_secret*.json

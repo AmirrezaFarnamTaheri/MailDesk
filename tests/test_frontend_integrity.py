@@ -63,7 +63,8 @@ class FrontendIntegrityTests(unittest.TestCase):
     def test_optional_controls_are_progressively_disclosed(self):
         self.assertIn('More recipient options', INDEX_HTML)
         self.assertNotIn('<details class="advanced" open>', INDEX_HTML)
-        self.assertIn('Optional: pacing and duplicate handling', INDEX_HTML)
+        self.assertIn('Advanced delivery settings', INDEX_HTML)
+        self.assertIn('id="personalizationDetails"', INDEX_HTML)
 
     def test_duplicate_readiness_and_approval_ui_is_removed(self):
         for token in ('campaignReadiness', 'reviewedCheck', 'refreshBeforeReview', 'batchChip', 'healthChip', 'refreshButton'):
@@ -74,9 +75,10 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('openSheetViewerButton', self.html)
         self.assertIn('sheetViewerDialog', self.html)
         self.assertIn('/api/imports/${state.importId}/rows', self.js)
-        self.assertIn("title:'Set up senders carefully'", self.js)
-        self.assertIn("title:'Inspect the source'", self.js)
-        self.assertGreaterEqual(self.js.count("title:'"), 8)
+        self.assertIn("title:'Four clear steps'", self.js)
+        self.assertIn("title:'Preview personalized messages'", self.js)
+        self.assertNotIn("view:'accounts'", self.js[self.js.index('const tourSteps=['):self.js.index('function startTour')])
+        self.assertGreaterEqual(self.js.count("title:'"), 5)
 
     def test_first_run_tour_is_wired_and_replayable(self):
         self.assertIn('id="tourOverlay"', INDEX_HTML)
@@ -88,7 +90,8 @@ class FrontendIntegrityTests(unittest.TestCase):
 
     def test_wizard_does_not_restore_a_stale_step_without_runtime_state(self):
         self.assertNotIn('step:state.step', APP_JS)
-        self.assertIn('if(data.sourceTab)setSourceTab(data.sourceTab);setStep(1);', APP_JS)
+        self.assertIn('if(data.sourceTab)setSourceTab(data.sourceTab);state.unlockedStep=1;setStep(1,{force:true});', APP_JS)
+        self.assertNotIn('unlockedStep:state.unlockedStep', APP_JS)
 
     def test_send_confirmation_is_simple_and_mode_specific(self):
         self.assertIn("`SEND ${r.messages.length}`", APP_JS)
@@ -109,7 +112,36 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('function setPlaceholderFallback(key,fallback)', APP_JS)
         self.assertIn('placeholderMappingLocked', APP_JS)
         self.assertIn("No column · use fallback only", APP_JS)
-        self.assertIn("selector:'.personalization-workbench'", APP_JS)
+        self.assertIn('id="personalizationDetails"', INDEX_HTML)
+        self.assertIn('els.personalizationDetails.open=true', APP_JS)
+
+    def test_template_authoring_is_guided_and_previewable(self):
+        for token in (
+            "templateSaveStatus",
+            "duplicateTemplateButton",
+            "templateFillStatus",
+            "placeholderTargetSelect",
+            "templateSampleRowSelect",
+            "templateSampleStatus",
+            "templateSampleSubject",
+            "templateSampleBody",
+        ):
+            self.assertIn(f'id="{token}"', INDEX_HTML)
+        self.assertIn("function renderTemplateSample()", APP_JS)
+        self.assertIn("function renderTemplateTextSample(", APP_JS)
+        self.assertIn("function templateFieldReadiness(", APP_JS)
+        self.assertIn("function insertIntoTemplateTarget(", APP_JS)
+
+    def test_template_changes_are_not_silently_discarded(self):
+        self.assertIn("templateDirty: false", APP_JS)
+        self.assertIn("function canLeaveTemplate()", APP_JS)
+        self.assertIn("Discard unsaved template changes?", APP_JS)
+        self.assertIn("New template · not saved", APP_JS)
+        self.assertIn("Unsaved changes", APP_JS)
+        self.assertIn("els.saveTemplateButton.disabled=true", APP_JS)
+
+    def test_four_step_workflow_has_no_stale_step_five_jump(self):
+        self.assertNotIn("setStep(5)", APP_JS)
 
     def test_placeholder_mapping_ui_is_wired_to_render_payload(self):
         self.assertIn('id="placeholderMappingList"', INDEX_HTML)
@@ -117,11 +149,25 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('templatePlaceholderInfo', APP_JS)
         self.assertIn('placeholder_mappings:Object.fromEntries', APP_JS)
 
+    def test_live_sheet_summary_writes_to_registered_dom_element(self):
+        self.assertIn("els.liveSheetSummary.textContent=", APP_JS)
+        self.assertNotIn("state.liveSheetSummary.textContent=", APP_JS)
+
     def test_live_sheet_stays_beside_message_preview(self):
         self.assertIn('id="liveSheetCard"', INDEX_HTML)
         self.assertIn('id="liveSheetTable"', INDEX_HTML)
         self.assertIn('function renderLiveSheet()', APP_JS)
         self.assertIn("findIndex(message=>String(message.row_number)===String(row._row))", APP_JS)
+
+
+    def test_google_oauth_setup_is_reusable_and_has_health_controls(self):
+        for token in ("connectGoogleButton", "oauthFileLabel", "googleOauthStatus"):
+            self.assertIn(f'id="{token}"', INDEX_HTML)
+        self.assertIn("/api/oauth/google/client", APP_JS)
+        self.assertIn("function reconnectGoogleAccount(email)", APP_JS)
+        self.assertIn("function checkGoogleAccount(email)", APP_JS)
+        self.assertIn("Forget saved client", APP_JS)
+        self.assertIn("does not revoke the Google authorization", APP_JS)
 
     def test_browser_sender_setup_prefers_detected_accounts(self):
         self.assertIn('id="detectedBrowserAccounts"', INDEX_HTML)
@@ -129,6 +175,35 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertIn('/api/browser-profiles?refresh=true', APP_JS)
         self.assertIn('p?.gmail_accounts||[]', APP_JS)
         self.assertIn('Can’t see the account?', INDEX_HTML)
+
+    def test_oauth2_setup_is_explicit_and_sheets_scope_is_opt_in(self):
+        self.assertIn('Google OAuth 2.0', INDEX_HTML)
+        self.assertIn('OAuth 2.0 setup', APP_JS)
+        sheets = re.search(r'<input id="includeSheetsScope"[^>]*>', INDEX_HTML)
+        self.assertIsNotNone(sheets)
+        self.assertNotIn('checked', sheets.group(0))
+        self.assertIn('only needed for Google Sheets recipient lists', INDEX_HTML)
+
+    def test_primary_navigation_and_dynamic_states_are_announced(self):
+        self.assertIn('class="skip-link" href="#mainContent"', INDEX_HTML)
+        self.assertIn('id="mainContent"', INDEX_HTML)
+        self.assertIn('class="nav-icon" aria-hidden="true"', INDEX_HTML)
+        self.assertIn('class="source-tab is-active" data-source-tab="file" aria-pressed="true"', INDEX_HTML)
+        self.assertIn('class="editor-tab is-active" data-editor="plain" aria-pressed="true"', INDEX_HTML)
+        self.assertIn('id="busyOverlay" class="busy-overlay is-hidden" role="status" aria-live="polite" aria-hidden="true"', INDEX_HTML)
+        self.assertIn("setAttribute('aria-pressed',String(active))", APP_JS)
+        self.assertIn("setAttribute('aria-current','page')", APP_JS)
+        self.assertIn("setAttribute('aria-hidden',String(!on))", APP_JS)
+
+    def test_visual_review_e2e_has_stable_product_selectors(self):
+        self.assertIn('data-testid="main-content"', INDEX_HTML)
+        self.assertIn('data-testid="nav-senders"', INDEX_HTML)
+        self.assertIn('data-testid="gmail-oauth-setup"', INDEX_HTML)
+
+    def test_tour_keeps_keyboard_focus_inside_dialog(self):
+        self.assertIn('function handleTourKeydown(event)', APP_JS)
+        self.assertIn("event.key!=='Tab'", APP_JS)
+        self.assertIn("event.preventDefault()", APP_JS)
 
 
 if __name__ == "__main__":

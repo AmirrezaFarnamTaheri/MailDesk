@@ -226,6 +226,136 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertIn("filename is invalid or too long", response.json()["detail"])
 
+
+
+
+    def test_oauth_redirect_uses_actual_loopback_listener_not_host_header(self):
+        from starlette.requests import Request
+
+        request = Request({
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/accounts/google/start",
+            "raw_path": b"/api/accounts/google/start",
+            "query_string": b"",
+            "headers": [(b"host", b"localhost:9999")],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8765),
+        })
+        self.assertEqual(
+            self.main._oauth_redirect_uri(request),
+            "http://127.0.0.1:8765/oauth/google/callback",
+        )
+
+    def test_oauth_callback_error_requires_and_consumes_valid_state(self):
+        missing = self.client.get("/oauth/google/callback", params={"error": "access_denied", "state": "missing"})
+        self.assertEqual(missing.status_code, 200)
+        self.assertIn("could not be verified", missing.text)
+
+        state = "cancelled-state"
+        self.main.oauth_sessions[state] = {
+            "state": state,
+            "verifier": "verifier",
+            "redirect_uri": "http://testserver/oauth/google/callback",
+            "requested_scopes": self.main.GMAIL_SCOPE,
+            "client": {"client_id": "client"},
+            "created": time.time(),
+            "expected_email": "",
+        }
+        cancelled = self.client.get("/oauth/google/callback", params={"error": "access_denied", "state": state})
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertIn("cancelled or denied", cancelled.text)
+        self.assertNotIn(state, self.main.oauth_sessions)
+        self.assertEqual(cancelled.headers.get("cache-control"), "no-store, max-age=0")
+
+    def test_oauth_sessions_are_bounded(self):
+        self.main.oauth_sessions.clear()
+        now = time.time()
+        for index in range(self.main.OAUTH_SESSION_MAX + 7):
+            self.main.oauth_sessions[f"state-{index}"] = {"created": now + index}
+        self.main._prune_oauth_sessions()
+        self.assertEqual(len(self.main.oauth_sessions), self.main.OAUTH_SESSION_MAX)
+        self.assertNotIn("state-0", self.main.oauth_sessions)
+        self.assertIn(f"state-{self.main.OAUTH_SESSION_MAX + 6}", self.main.oauth_sessions)
+
+    def test_oauth_client_status_describes_oauth2_pkce_loopback(self):
+        status = self.client.get("/api/oauth/google/client")
+        self.assertEqual(status.status_code, 200)
+        payload = status.json()
+        self.assertEqual(payload["oauth_version"], "2.0")
+        self.assertTrue(payload["pkce"])
+        self.assertEqual(payload["redirect_mode"], "loopback")
+
+    def test_google_oauth_client_is_saved_once_and_reused_for_new_connections(self):
+        document = b'{"installed":{"client_id":"saved-client","client_secret":"saved-secret"}}'
+        saved = self.client.post(
+            "/api/oauth/google/client",
+            files={"client_secret": ("client.json", document, "application/json")},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()["configured"])
+        self.assertNotIn("saved-secret", saved.text)
+
+        started = self.client.post(
+            "/api/accounts/google/start",
+            data={"include_sheets": "false"},
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertIn("accounts.google.com", started.json()["auth_url"])
+        session = next(reversed(self.main.oauth_sessions.values()))
+        self.assertEqual(session["client"]["client_id"], "saved-client")
+        self.assertNotIn(self.main.SHEETS_SCOPE, session["requested_scopes"])
+
+    def test_google_reconnect_locks_callback_to_the_requested_account(self):
+        client = {"client_id": "saved-client", "client_secret": "saved-secret"}
+        token = {
+            "access_token": "old-access",
+            "refresh_token": "refresh",
+            "scope": f"{self.main.GMAIL_SCOPE} {self.main.SHEETS_SCOPE}",
+            "expires_at": "2999-01-01T00:00:00+00:00",
+        }
+        self.main.store.save_account("expected@example.com", token, client)
+        response = self.client.post(
+            "/api/accounts/expected@example.com/reconnect",
+            data={"include_sheets": "false"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        session = next(reversed(self.main.oauth_sessions.values()))
+        self.assertEqual(session["expected_email"], "expected@example.com")
+        self.assertIn(self.main.SHEETS_SCOPE, session["requested_scopes"], "reconnect must not silently drop an existing Sheets grant")
+
+    def test_google_callback_rejects_a_different_account_during_reconnect(self):
+        state = "reconnect-state"
+        self.main.oauth_sessions[state] = {
+            "state": state,
+            "verifier": "verifier",
+            "redirect_uri": "http://testserver/oauth/google/callback",
+            "requested_scopes": self.main.GMAIL_SCOPE,
+            "client": {"client_id": "client", "client_secret": "secret"},
+            "created": time.time(),
+            "expected_email": "expected@example.com",
+        }
+        fake_token = {"access_token": "access", "refresh_token": "refresh", "scope": self.main.GMAIL_SCOPE, "expires_at": "2999-01-01T00:00:00+00:00"}
+        with unittest.mock.patch.object(self.main, "exchange_code", new=unittest.mock.AsyncMock(return_value=fake_token)), unittest.mock.patch.object(self.main, "profile_email", new=unittest.mock.AsyncMock(return_value="other@example.com")):
+            response = self.client.get("/oauth/google/callback", params={"state": state, "code": "code"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("other@example.com", response.text)
+        self.assertIn("expected@example.com", response.text)
+        self.assertIsNone(self.main.store.get_account("other@example.com"))
+
+    def test_google_connection_check_returns_non_secret_health(self):
+        token = {"access_token": "access-secret", "refresh_token": "refresh-secret", "scope": self.main.GMAIL_SCOPE, "expires_at": "2999-01-01T00:00:00+00:00"}
+        with unittest.mock.patch.object(self.main, "_verified_google_account", new=unittest.mock.AsyncMock(return_value=(token, "healthy@example.com"))):
+            response = self.client.post("/api/accounts/healthy@example.com/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["gmail"])
+        self.assertTrue(payload["refresh_available"])
+        self.assertNotIn("access-secret", response.text)
+        self.assertNotIn("refresh-secret", response.text)
+
     def test_oversized_oauth_client_is_rejected_instead_of_truncated(self):
         response = self.client.post(
             "/api/accounts/google/start",

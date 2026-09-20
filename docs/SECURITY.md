@@ -22,12 +22,22 @@ Browser mode cannot securely introspect Gmail's internal account-slot assignment
 
 ## Secrets
 
-Google access/refresh tokens and client credentials are encrypted at rest:
+Google access/refresh tokens, per-account OAuth clients, and the reusable Google Desktop OAuth client are encrypted at rest:
 
 - Windows: DPAPI tied to the current user.
 - Non-Windows development: local Fernet key.
 
-API responses never expose stored tokens or OAuth client secrets.
+API responses never expose stored tokens or OAuth client secrets. Account health endpoints return only non-secret metadata such as granted capability flags, refresh availability and expiry timestamps.
+
+
+## OAuth lifecycle safety
+
+- Authorization uses the OAuth 2.0 authorization-code flow with PKCE (S256) and a one-time random state value. The external browser returns to a `127.0.0.1` loopback callback derived from the actual local listener, not from an untrusted Host header.
+- OAuth callback state is short-lived, single-use, memory-only and bounded; callback responses are marked `no-store`. Reconnect flows bind the callback to the expected Gmail address. A different Google identity is shown as an error and is not saved.
+- Refresh-token rotation is supported; if Google returns a replacement refresh token, MailDesk persists the new value.
+- `invalid_grant` and similar token failures become reconnect guidance rather than leaking upstream token payloads.
+- Local **Disconnect** removes MailDesk's stored account only. Explicit revocation is separate because provider-side revocation is stronger and can invalidate the project's granted access.
+- MailDesk does not fall back to username/password Gmail authentication or request the broad `https://mail.google.com/` scope merely to support SMTP/IMAP compatibility. New connections request only `gmail.compose` unless the user explicitly opts into read-only Google Sheets access.
 
 ## Review and send gates
 

@@ -236,6 +236,40 @@ class ApiQueueSafetyTests(unittest.TestCase):
         self.assertFalse(self.main.store.fingerprint_succeeded("interrupted-fp"))
         self.assertEqual(self.main.store.history(1)[0]["result"], "Uncertain")
 
+    def test_gmail_item_is_durable_in_flight_before_remote_mutation(self):
+        campaign = self.main.store.create_campaign(
+            {
+                "name": "Durable send boundary",
+                "mode": "send",
+                "account": "sender@example.com",
+                "batch_id": "durable-boundary-123",
+                "status": "Queued",
+                "throttle_ms": 0,
+            },
+            [{"row_number": "2", "to": "to@example.com", "subject": "S", "body": "B", "fingerprint": "durable-fp", "attachments": []}],
+        )
+        token = {"access_token": "token", "expires_at": "2999-01-01T00:00:00+00:00", "scope": "https://www.googleapis.com/auth/gmail.compose"}
+
+        async def assert_in_flight(*_args, **_kwargs):
+            current = self.main.store.get_campaign(campaign["id"], include_items=True)
+            self.assertEqual(current["items"][0]["status"], "InFlight")
+            self.assertEqual(current["items"][0]["attempts"], 1)
+            return "gmail-123"
+
+        async def run_test():
+            with patch.object(
+                self.main,
+                "_verified_google_account",
+                AsyncMock(return_value=(token, "sender@example.com")),
+            ), patch.object(self.main, "send_message", side_effect=assert_in_flight):
+                await self.main._run_campaign_locked(campaign["id"])
+
+        asyncio.run(run_test())
+        current = self.main.store.get_campaign(campaign["id"], include_items=True)
+        self.assertEqual(current["status"], "Completed")
+        self.assertEqual(current["items"][0]["status"], "Success")
+        self.assertEqual(current["items"][0]["attempts"], 1)
+
     def test_gmail_campaign_reuses_one_http_pool_for_multiple_messages(self):
         campaign = self.main.store.create_campaign(
             {

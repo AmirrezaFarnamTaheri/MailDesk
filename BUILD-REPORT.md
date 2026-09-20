@@ -1,37 +1,44 @@
-# MailDesk 0.2.0 — Implementation Report
+# MailDesk 0.3.1 — Integration Report
 
-## Completed backlog
+## Current implementation status
 
-| # | Area | Status | Delivered |
-|---|---|---|---|
-| 1 | Desktop productionization | Done | Native pywebview shell, single-instance guard, first-run UI, local state, app icon, migration backups, version/about, Windows packaging + optional signing |
-| 2 | Template system | Done | Plain + HTML, signatures, snippets, placeholder browser, defaults, conditionals, attachments, CID inline images |
-| 3 | Spreadsheet workflow | Done | XLSX/CSV drag-drop, header detection, mapping suggestions, filters, sorting, row selection, trim transform, campaign-only cell edits, duplicate warnings |
-| 4 | Multi-account handling | Done | Gmail API accounts plus explicit browser/profile/Gmail `/u/N/` sender routes with expected-email verification |
-| 5 | Send queue | Done | Durable message states, pause/resume/cancel/retry, throttling, queue inspection, restart-to-paused recovery |
-| 6 | Safety | Done | Dry run, exact sender checks, per-message edits, fingerprints, attachment validation, executable blocking, batch caps, final send confirmation |
-| 7 | Scheduling/history | Done | Local scheduling, campaign/row audit history, CSV export, campaign duplication into a new reviewed batch |
-| 8 | GUI redesign | Done | Five-step workflow with sticky live preview and Accounts/Queue/History workspaces |
-| 9 | Google Sheets | Done | Read-only OAuth scope, URL/ID import, local snapshot, worksheet selection, refresh-before-final-review path |
-| 10 | Hardening/distribution | Done | Security headers/origin guard, HTML value escaping, secret-redacting errors, backups, 21 tests, Windows/Linux CI, dedicated final-EXE/installer workflow |
+| Area | Status | Delivered |
+|---|---|---|
+| Desktop shell | Done | pywebview desktop shell, loopback FastAPI service, single-instance lock, packaging and installer workflow |
+| Guided templates | Done | reusable templates, spreadsheet-field insertion, fallback values, mapping health, unsaved-change protection, duplication and live sample recipient preview |
+| Spreadsheet workflow | Done | XLSX/CSV/Google Sheets snapshots, header detection, mappings, filters, row selection and preview |
+| Gmail OAuth | Done | OAuth 2.0 authorization-code + PKCE (S256), canonical 127.0.0.1 loopback callback, single-use bounded state sessions, encrypted per-account tokens/clients, reusable encrypted Desktop OAuth client, token refresh/rotation, account health checks, reconnect identity binding and explicit revoke endpoint |
+| Browser senders | Done | Chromium profile/account discovery, `/u/N/` routing and time-bounded human verification |
+| Gmail delivery | Done | Gmail API draft/send, MIME HTML/attachments/CID images, exact-account verification and uncertain-outcome handling |
+| Queue/scheduling | Done | durable queue, pause/resume/cancel/retry, scheduling, restart-to-paused recovery and duplicate protection |
+| Audit/history | Done | per-operation results, remote IDs, CSV export and campaign inspection |
+| Safety | Done | dry run, send confirmation, scope checks, attachment policy, local-origin guard, secret redaction and migration backups |
+| CI visual review | Done | Playwright starts the real loopback service, opens Senders, asserts Gmail OAuth/browser sender controls, and uploads a review screenshot plus server log |
+| OAuth reference integration | Done | compatible lifecycle patterns merged; obsolete OAuth 1.0, Python 2 password/IMAP code, embedded OAuth server and IMAP/POP/SMTP proxy deliberately not vendored |
 
-## Verification performed in this environment
+## OAuth/Gmail reference integration
 
-- `python -m unittest discover -s tests -v` — **21 passed**.
+The supplied `email-oauth2-proxy`, `example-oauth2-server`, `python-oauth2`, and `gmail` repositories were reviewed against MailDesk's architecture. The resulting implementation is documented in `docs/OAUTH-INTEGRATION.md`.
+
+Key outcomes:
+
+- reusable provider-neutral OAuth lifecycle primitives live in `mailmerge_app/oauth_client.py`;
+- Google Desktop client setup is encrypted and reusable instead of requiring a JSON upload for every Gmail account;
+- refresh-token rotation is preserved correctly;
+- reconnect callbacks are bound to the intended Gmail identity;
+- health/reconnect/revocation are explicit lifecycle actions;
+- Gmail API compose remains the production transport, avoiding unnecessary `https://mail.google.com/` scope expansion and legacy password authentication.
+
+## Verification performed
+
+- `pytest -q` — **127 passed**.
 - `python -m compileall -q mailmerge_app` — passed.
 - `node --check mailmerge_app/static/app.js` — passed.
-- UI reference integrity — **125 JavaScript element references, 0 missing IDs**.
-- Version consistency — package, API, pyproject and installer all **0.2.0**.
-- GitHub Actions workflow syntax — `.github/workflows/ci.yml` and `.github/workflows/build-windows.yml` parsed successfully.
-- Dedicated Windows workflow — builds the EXE + installer, performs PE/MZ validation and a frozen-GUI marker-file startup smoke test on Windows, generates SHA-256 checksums, and uploads separate downloadable artifacts.
-- Live localhost smoke:
-  - `/api/health` → `{"status":"ok","version":"0.2.0"}`;
-  - `/` → HTTP 200 and complete GUI;
-  - security headers present;
-  - simulated foreign Origin mutation → HTTP 403.
+- `python scripts/visual_review_e2e.py` — passed against a running local application; the review image is written to `artifacts/visual-review/senders.png`.
+- Version consistency — package, runtime, pyproject and installer all **0.3.1**.
+- Live loopback API smoke — `/api/health` returned `{"status":"ok","version":"0.3.1"}`.
+- OAuth-specific regression coverage includes PKCE/login hints, canonical loopback redirect construction, single-use/bounded state sessions, no-store callback responses, reusable client setup, bearer-token validation, refresh-token rotation, invalid-grant handling, expected-account reconnect binding, least-privilege Sheets opt-in, non-secret health output and revocation.
 
-## Environment limitation
+## CI review evidence
 
-The Windows `.exe` / Inno Setup installer cannot be built natively in this Linux execution environment. The repository now includes a dedicated `.github/workflows/build-windows.yml` workflow that runs on GitHub-hosted Windows, executes `packaging/build-windows.ps1`, smoke-tests the frozen GUI `MailDesk.exe` through its headless marker-file mode, generates SHA-256 checksums, builds the installer, optionally signs both outputs, and uploads separate EXE and installer artifacts.
-
-The requested hosted visual-design CLI was also attempted but its package installation timed out in this environment. The GUI was therefore implemented directly and verified structurally/functionally rather than claiming hosted image-to-code fidelity validation.
+The CI workflow uploads `MailDesk-Visual-Review-<commit>` for every push and pull request. The artifact contains the browser-generated Senders screenshot and service log, making the rendered OAuth account setup reviewable alongside the automated end-to-end assertions.

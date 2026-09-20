@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -15,10 +16,10 @@
         <div><div class="brand-name">MailDesk</div><div class="brand-subtitle">Spreadsheet mail merge</div></div>
       </div>
       <nav class="nav" aria-label="Primary">
-        <button type="button" class="nav-item is-active" data-view="campaign"><span class="nav-icon">✉</span><span>Compose</span></button>
-        <button type="button" class="nav-item" data-view="queue"><span class="nav-icon">≋</span><span>Queue</span><span class="nav-badge" id="queueBadge">0</span></button>
-        <button type="button" class="nav-item" data-view="accounts"><span class="nav-icon">◎</span><span>Senders</span></button>
-        <button type="button" class="nav-item" data-view="history"><span class="nav-icon">↺</span><span>History</span></button>
+        <button type="button" class="nav-item is-active" data-view="campaign" aria-current="page"><span class="nav-icon" aria-hidden="true">✉</span><span>Compose</span></button>
+        <button type="button" class="nav-item" data-view="queue"><span class="nav-icon" aria-hidden="true">≋</span><span>Campaigns</span><span class="nav-badge" id="queueBadge">0</span></button>
+        <button type="button" class="nav-item" data-testid="nav-senders" data-view="accounts"><span class="nav-icon" aria-hidden="true">◎</span><span>Senders</span></button>
+        <button type="button" class="nav-item" data-view="history"><span class="nav-icon" aria-hidden="true">↺</span><span>Activity</span></button>
       </nav>
       <div class="sidebar-foot">
         <button type="button" class="sidebar-link" id="startTourButton">Quick tour</button>
@@ -26,19 +27,18 @@
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main" id="mainContent" data-testid="main-content" tabindex="-1">
       <header class="topbar">
-        <div><h1 id="viewTitle">Compose campaign</h1><p id="viewSubtitle">Add recipients, write the message, check it, then choose how to deliver it.</p></div>
+        <div><h1 id="viewTitle">Compose campaign</h1><p id="viewSubtitle">Choose recipients, write the email, preview it, then send or save it.</p></div>
       </header>
 
       <section class="view is-visible" id="campaignView">
-        <div class="workflow-strip" role="tablist" aria-label="Campaign steps">
+        <nav class="workflow-strip" aria-label="Campaign progress">
           <button type="button" class="workflow-step is-active" data-step="1"><span>1</span><b>Recipients</b></button>
-          <button type="button" class="workflow-step" data-step="2"><span>2</span><b>Message</b></button>
-          <button type="button" class="workflow-step" data-step="3"><span>3</span><b>Check</b></button>
-          <button type="button" class="workflow-step" data-step="4"><span>4</span><b>Delivery</b></button>
-          <button type="button" class="workflow-step" data-step="5"><span>5</span><b>Review</b></button>
-        </div>
+          <button type="button" class="workflow-step" data-step="2" disabled aria-disabled="true"><span>2</span><b>Write</b></button>
+          <button type="button" class="workflow-step" data-step="3" disabled aria-disabled="true"><span>3</span><b>Preview</b></button>
+          <button type="button" class="workflow-step" data-step="4" disabled aria-disabled="true"><span>4</span><b>Send</b></button>
+        </nav>
 
         <div class="campaign-grid">
           <div class="workflow-main">
@@ -47,8 +47,8 @@
                 <div class="panel-head"><div><h2>Recipients</h2><p>Load a spreadsheet and choose the recipient column.</p></div><div class="panel-state" id="sourceState">Not loaded</div></div>
                 <div class="panel-body">
                   <div class="source-tabs">
-                    <button class="source-tab is-active" data-source-tab="file">Local file</button>
-                    <button class="source-tab" data-source-tab="google">Google Sheets</button>
+                    <button type="button" class="source-tab is-active" data-source-tab="file" aria-pressed="true">Local file</button>
+                    <button type="button" class="source-tab" data-source-tab="google" aria-pressed="false">Google Sheets</button>
                   </div>
                   <div id="fileSourcePane" class="source-pane is-visible">
                     <label class="dropzone" for="sheetFile" id="dropzone"><input id="sheetFile" type="file" accept=".xlsx,.xlsm,.csv" hidden><span class="dropzone-icon">⇧</span><span class="dropzone-main" id="sheetFileLabel">Choose Excel / CSV or drop it here</span><span class="dropzone-sub">.xlsx, .xlsm, .csv · up to 25 MB</span></label>
@@ -61,13 +61,18 @@
                     <div class="button-row"><button class="button primary" id="loadGoogleSheetButton">Load snapshot</button><button class="button secondary is-hidden" id="refreshGoogleSheetButton">Refresh snapshot</button><span class="hint" id="snapshotHint"></span></div>
                   </div>
 
-                  <div class="field-grid two compact-top">
+                  <div class="field-grid compact-top">
                     <label class="field"><span>Worksheet</span><select id="sheetSelect" disabled></select></label>
-                    <label class="field"><span>Header row</span><input id="headerRow" type="number" min="1" placeholder="Auto" disabled></label>
-                    <label class="field"><span>Recipient email</span><select id="toColumn" disabled></select></label>
-                    <label class="field"><span>Name <em>optional</em></span><select id="nameColumn" disabled></select></label>
                   </div>
-                  <div class="mapping-callout" id="mappingCallout">Load a source to get automatic column suggestions.</div>
+                  <div class="mapping-callout" id="mappingCallout">Load a source and MailDesk will suggest the recipient columns.</div>
+                  <details class="advanced compact-advanced mapping-details" id="recipientMappingDetails" open>
+                    <summary>Edit column mapping</summary>
+                    <div class="field-grid three">
+                      <label class="field"><span>Recipient email</span><select id="toColumn" disabled></select></label>
+                      <label class="field"><span>Name <em>optional</em></span><select id="nameColumn" disabled></select></label>
+                      <label class="field"><span>Header row</span><input id="headerRow" type="number" min="1" placeholder="Auto" disabled></label>
+                    </div>
+                  </details>
                   <details class="advanced">
                     <summary>More recipient options</summary>
                     <div class="field-grid two">
@@ -87,7 +92,7 @@
                     <label class="check-row"><input id="trimValues" type="checkbox" checked><span>Trim surrounding whitespace from spreadsheet values</span></label>
                   </details>
                   <div class="sheet-preview-wrap is-hidden" id="sheetPreviewWrap">
-                    <div class="mini-toolbar"><div><strong id="sheetSummary">0 rows</strong><span id="selectionSummary"> · all selected</span></div><div class="toolbar-actions"><button class="button secondary small" id="openSheetViewerButton">Open sheet viewer</button><button class="button ghost small" id="selectVisibleButton">Select visible</button><button class="button ghost small" id="clearVisibleButton">Clear visible</button></div></div>
+                    <div class="mini-toolbar"><div><strong id="sheetSummary">0 rows</strong><span id="selectionSummary"> · all selected</span></div><div class="toolbar-actions"><button class="button secondary small" id="openSheetViewerButton">Open sheet viewer</button><button class="button ghost small" id="selectVisibleButton">Select shown</button><button class="button ghost small" id="clearVisibleButton">Clear shown</button></div></div>
                     <div class="table-scroll"><table class="data-table selectable" id="sheetPreview"></table></div>
                   </div>
                 </div>
@@ -96,116 +101,139 @@
 
             <section class="step-pane" data-step-pane="2">
               <div class="panel">
-                <div class="panel-head"><div><h2>Message</h2><p>Write with reusable placeholders, then map them to columns in this sheet.</p></div><div class="panel-actions"><button class="button ghost small" id="newTemplateButton">New</button><button class="button secondary small" id="saveTemplateButton">Save template</button></div></div>
+                <div class="panel-head"><div><h2>Write</h2><p>Write the email first. Open personalization and template tools only when you need them.</p></div></div>
                 <div class="panel-body">
-                  <div class="field-grid two template-fields">
-                    <label class="field"><span>Template</span><select id="templateSelect"></select></label>
-                    <label class="field"><span>Name</span><input id="templateName" type="text" maxlength="120"></label>
+                  <div class="template-workspace" aria-label="Template setup">
+                    <div class="template-library-row">
+                      <label class="field template-picker"><span>Start from a saved template</span><select id="templateSelect" aria-label="Saved templates"></select></label>
+                      <div class="template-library-actions"><button type="button" class="button secondary small" id="newTemplateButton">New blank</button><button type="button" class="button ghost small" id="duplicateTemplateButton">Duplicate</button></div>
+                    </div>
+                    <div class="template-identity-row">
+                      <label class="field template-name-field"><span>Template name <em>used when saving</em></span><input id="templateName" type="text" maxlength="120" placeholder="e.g. Partnership follow-up"></label>
+                      <div class="template-save-area"><span class="template-save-status" id="templateSaveStatus">Saved</span><button type="button" class="button primary small" id="saveTemplateButton">Save template</button><button type="button" class="button ghost-danger small" id="deleteTemplateButton">Delete</button></div>
+                    </div>
                   </div>
-                  <label class="field"><span>Subject</span><input id="subjectTemplate" type="text" maxlength="998" placeholder="A quick note"></label>
-                  <div class="editor-tabs"><button class="editor-tab is-active" data-editor="plain">Plain text</button><button class="editor-tab" data-editor="html">Rich HTML</button></div>
+
+                  <label class="field compact-top"><span>Subject</span><input id="subjectTemplate" type="text" maxlength="998" placeholder="A quick note for {{Name|there}}"></label>
+                  <div class="editor-tabs"><button type="button" class="editor-tab is-active" data-editor="plain" aria-pressed="true">Plain text</button><button type="button" class="editor-tab" data-editor="html" aria-pressed="false">Formatted</button></div>
                   <div class="editor-pane is-visible" id="plainEditorPane"><label class="field"><span>Message</span><textarea id="bodyTemplate" rows="13" placeholder="Hello {{Name|there}},&#10;&#10;Write your message here."></textarea></label></div>
                   <div class="editor-pane" id="htmlEditorPane">
                     <div class="rich-toolbar"><button data-rich="bold"><b>B</b></button><button data-rich="italic"><i>I</i></button><button data-rich="insertUnorderedList">• List</button><button id="clearFormattingButton">Clear</button></div>
-                    <div id="bodyHtmlEditor" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Optional HTML version of the message"></div>
-                    <label class="field compact-top"><span>HTML signature <em>optional</em></span><div id="signatureHtmlEditor" class="rich-editor compact" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Signature, links, logo text…"></div></label>
+                    <div id="bodyHtmlEditor" class="rich-editor" contenteditable="true" role="textbox" aria-label="Formatted message" aria-multiline="true" data-placeholder="Optional formatted version of the message"></div>
+                    <label class="field compact-top"><span>Signature <em>optional</em></span><div id="signatureHtmlEditor" class="rich-editor compact" contenteditable="true" role="textbox" aria-label="Formatted signature" aria-multiline="true" data-placeholder="Signature, links, logo text…"></div></label>
                   </div>
-                  <div class="personalization-workbench">
-                    <div class="personalization-builder">
-                      <div class="personalization-builder-head">
-                        <div><span class="section-kicker">Personalization builder</span><strong>Create a reusable placeholder</strong><span>Name it once, choose where its value comes from, and insert it at the current cursor.</span></div>
-                        <span class="insert-target" id="placeholderInsertTarget">Insert into · Message</span>
-                      </div>
-                      <div class="placeholder-builder-grid">
-                        <label class="field placeholder-builder-field"><span><b class="builder-step">1</b> Placeholder name</span><input id="placeholderNameInput" type="text" maxlength="80" autocomplete="off" placeholder="FirstName"></label>
-                        <label class="field placeholder-builder-field"><span><b class="builder-step">2</b> Fill from</span><select id="placeholderSourceSelect"><option value="">Choose a source…</option></select></label>
-                        <label class="field placeholder-builder-field"><span><b class="builder-step">3</b> Fallback if blank <em>optional</em></span><input id="placeholderFallbackInput" type="text" maxlength="240" autocomplete="off" placeholder="there"></label>
-                      </div>
-                      <div class="placeholder-builder-preview">
-                        <div class="builder-preview-cell"><span>Token</span><code id="placeholderTokenPreview">{{Placeholder}}</code></div>
-                        <div class="builder-preview-cell sample"><span>Sample value</span><strong id="placeholderSamplePreview">Choose a source</strong></div>
-                        <div class="placeholder-builder-actions"><button type="button" class="button primary" id="insertPlaceholderButton" disabled>Insert placeholder</button><button type="button" class="button secondary" id="insertConditionalButton" disabled>Insert condition</button></div>
-                      </div>
-                      <div class="placeholder-quick-source">
-                        <div><span>Quick source</span><small>Pick a column to prefill the builder. You can rename the placeholder before inserting it.</small></div>
-                        <div class="placeholder-list" id="placeholderList"><span class="empty-inline">Load a source to see columns.</span></div>
-                      </div>
+
+                  <section class="template-fill-card" aria-labelledby="templateFillTitle">
+                    <div class="template-fill-head">
+                      <div><span class="section-kicker">Personalization</span><strong id="templateFillTitle">Add spreadsheet data</strong><span>Pick a column, see a real example, then insert it into the template.</span></div>
+                      <span class="template-fill-status" id="templateFillStatus">No personalized fields yet</span>
                     </div>
-                    <div class="placeholder-mapper">
-                      <div class="placeholder-mapper-head">
-                        <div><strong>Used placeholders</strong><span id="placeholderMappingSummary">No placeholders in this template yet.</span></div>
-                        <button type="button" class="button secondary small" id="autoMapPlaceholdersButton">Auto-match columns</button>
-                      </div>
-                      <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline placeholder-empty-state">Create or type a placeholder to map it.</div></div>
+                    <div class="template-field-builder">
+                      <label class="field"><span>Fill from</span><select id="placeholderSourceSelect"><option value="">Choose a spreadsheet column…</option></select></label>
+                      <label class="field"><span>Fallback if blank <em>recommended for greetings</em></span><input id="placeholderFallbackInput" type="text" maxlength="240" autocomplete="off" placeholder="e.g. there"></label>
+                      <label class="field insert-target-field"><span>Insert into</span><select id="placeholderTargetSelect"><option value="body">Message</option><option value="subject">Subject</option><option value="cc">Cc</option><option value="bcc">Bcc</option></select><small id="placeholderInsertTarget">Will insert into · Message</small></label>
+                      <div class="template-field-action"><button type="button" class="button primary" id="insertPlaceholderButton" disabled>Insert field</button><button type="button" class="button secondary" id="insertConditionalButton" disabled>Only show when filled</button></div>
                     </div>
-                  </div>
-                  <div class="split-section">
-                    <div><div class="field-label-row"><span>Reusable snippets</span><button class="button ghost small" id="newSnippetButton">New snippet</button></div><div class="snippet-list" id="snippetList"></div></div>
-                    <div><div class="field-label-row"><span>Attachments</span><label class="button ghost small" for="attachmentFile">Add file<input id="attachmentFile" type="file" hidden multiple></label></div><div class="attachment-list" id="attachmentList"></div><p class="hint">Up to 20 MB each. Executables/scripts are blocked. Browser compose mode cannot auto-attach files.</p></div>
-                  </div>
-                  <div class="danger-zone"><button class="button ghost-danger small" id="deleteTemplateButton">Delete template</button></div>
+                    <div class="template-field-preview">
+                      <div><span>Template token</span><code id="placeholderTokenPreview">{{Placeholder}}</code></div>
+                      <div><span>Example value</span><strong id="placeholderSamplePreview">Choose a spreadsheet column</strong></div>
+                      <details class="field-name-advanced"><summary>Use a custom field name</summary><label class="field"><span>Field name</span><input id="placeholderNameInput" type="text" maxlength="80" autocomplete="off" placeholder="FirstName"></label></details>
+                    </div>
+                    <div class="placeholder-quick-source">
+                      <div><span>Quick insert</span><small>Choose a column below, then click Insert field.</small></div>
+                      <div class="placeholder-list" id="placeholderList"><span class="empty-inline">Load recipients to see spreadsheet columns.</span></div>
+                    </div>
+                    <details class="template-field-mapping" id="personalizationDetails">
+                      <summary><span>Fields used in this template</span><span class="summary-note" id="personalizationSummary">No fields yet</span></summary>
+                      <div class="placeholder-mapper">
+                        <div class="placeholder-mapper-head">
+                          <div><strong>How fields are filled</strong><span id="placeholderMappingSummary">No placeholders in this template yet.</span></div>
+                          <button type="button" class="button secondary small" id="autoMapPlaceholdersButton">Auto-match columns</button>
+                        </div>
+                        <div class="placeholder-mapping-list" id="placeholderMappingList"><div class="empty-inline placeholder-empty-state">Insert a spreadsheet field above to get started.</div></div>
+                      </div>
+                    </details>
+                  </section>
+
+                  <section class="template-sample-card" aria-labelledby="templateSampleTitle">
+                    <div class="template-sample-head">
+                      <div><span class="section-kicker">Live example</span><strong id="templateSampleTitle">See how the template fills</strong><span>Use a real spreadsheet row before you save or send anything.</span></div>
+                      <label class="template-sample-row"><span>Example recipient</span><select id="templateSampleRowSelect" disabled><option value="">Load recipients first</option></select></label>
+                    </div>
+                    <div class="template-sample-status" id="templateSampleStatus">Load recipients to test this template with real data.</div>
+                    <div class="template-sample-content">
+                      <div class="template-sample-subject"><span>Subject</span><strong id="templateSampleSubject">Your subject will appear here.</strong></div>
+                      <div class="template-sample-message"><span>Message</span><pre id="templateSampleBody">Your personalized message will appear here.</pre></div>
+                    </div>
+                  </section>
+
+                  <div class="composer-tools-label">More writing tools</div>
+                  <details class="advanced compact-advanced composer-tool-details">
+                    <summary>Snippets</summary>
+                    <div class="composer-tool-body"><div class="field-label-row"><span>Reusable snippets</span><button class="button ghost small" id="newSnippetButton">New snippet</button></div><div class="snippet-list" id="snippetList"></div></div>
+                  </details>
+
+                  <details class="advanced compact-advanced composer-tool-details">
+                    <summary>Attachments</summary>
+                    <div class="composer-tool-body"><div class="field-label-row"><span>Attached files</span><label class="button ghost small" for="attachmentFile">Add file<input id="attachmentFile" type="file" hidden multiple></label></div><div class="attachment-list" id="attachmentList"></div><p class="hint">Up to 20 MB each. Browser compose cannot attach files automatically.</p></div>
+                  </details>
+
+                  <details class="advanced compact-advanced composer-tool-details">
+                    <summary>Cc, Bcc and per-row attachments</summary>
+                    <div class="field-grid three">
+                      <label class="field"><span>Cc <em>optional</em></span><input id="ccTemplate" type="text" placeholder="manager@example.com or {{Cc}}"></label>
+                      <label class="field"><span>Bcc <em>optional</em></span><input id="bccTemplate" type="text" placeholder="audit@example.com"></label>
+                      <label class="field"><span>Attachment column <em>optional</em></span><select id="attachmentColumn" disabled></select></label>
+                    </div>
+                  </details>
                 </div>
               </div>
             </section>
 
             <section class="step-pane" data-step-pane="3">
               <div class="panel">
-                <div class="panel-head"><div><h2>Check messages</h2><p>Preview the personalized result and fix any row-level errors.</p></div><button type="button" class="button primary" id="renderButton">Check messages</button></div>
+                <div class="panel-head"><div><h2>Preview</h2><p>Review each personalized email and fix anything that needs attention before delivery.</p></div><button type="button" class="button secondary" id="renderButton">Refresh preview</button></div>
                 <div class="panel-body">
-                  <details class="advanced compact-advanced">
-                    <summary>Optional: Cc, Bcc and per-row attachments</summary>
-                    <div class="field-grid three">
-                      <label class="field"><span>Cc template</span><input id="ccTemplate" type="text" placeholder="manager@example.com or {{Cc}}"></label>
-                      <label class="field"><span>Bcc template</span><input id="bccTemplate" type="text" placeholder="audit@example.com"></label>
-                      <label class="field"><span>Attachment column <em>optional</em></span><select id="attachmentColumn" disabled></select></label>
-                    </div>
-                  </details>
-                  <div class="validation-summary" id="validationSummary"><div><b>0</b><span>rendered</span></div><div class="good"><b>0</b><span>valid</span></div><div class="bad"><b>0</b><span>errors</span></div><div class="warn"><b>0</b><span>warnings</span></div></div>
-                  <div id="validationList" class="validation-list"><div class="empty-card">Render messages to see row-level validation.</div></div>
+                  <div class="validation-summary" id="validationSummary"><div><b>0</b><span>messages</span></div><div class="good"><b>0</b><span>ready</span></div><div class="bad"><b>0</b><span>errors</span></div><div class="warn"><b>0</b><span>warnings</span></div></div>
+                  <div id="validationList" class="validation-list"><div class="empty-card">Your personalized messages will appear here automatically.</div></div>
                 </div>
               </div>
             </section>
 
             <section class="step-pane" data-step-pane="4">
-              <div class="panel">
-                <div class="panel-head"><div><h2>Delivery</h2><p>Choose what to do with the checked messages.</p></div></div>
+              <div class="panel final-panel">
+                <div class="panel-head"><div><h2>Send</h2><p>Choose what MailDesk should do with the messages you just reviewed.</p></div><button type="button" class="button ghost small" id="manageSendersButton">Manage senders</button></div>
                 <div class="panel-body">
-                  <div class="mode-grid" role="radiogroup" aria-label="Delivery mode">
-                    <label class="mode-card is-selected"><input type="radio" name="mode" value="dry_run" checked><span class="mode-icon">◇</span><span><strong>Dry run</strong><small>Build and validate the queue without sending.</small></span></label>
-                    <label class="mode-card"><input type="radio" name="mode" value="browser"><span class="mode-icon">◫</span><span><strong>Browser compose</strong><small>Open Gmail compose windows in a browser profile.</small></span></label>
-                    <label class="mode-card"><input type="radio" name="mode" value="draft"><span class="mode-icon">□</span><span><strong>Gmail drafts</strong><small>Create drafts in a connected Gmail account.</small></span></label>
-                    <label class="mode-card danger-mode"><input type="radio" name="mode" value="send"><span class="mode-icon">➤</span><span><strong>Send email</strong><small>Send through a connected Gmail account.</small></span></label>
+                  <div class="mode-grid" role="radiogroup" aria-label="Delivery action">
+                    <label class="mode-card is-selected"><input type="radio" name="mode" value="dry_run" checked><span class="mode-icon">◇</span><span><strong>Test only</strong><small>Validate the campaign without creating or sending email.</small></span></label>
+                    <label class="mode-card"><input type="radio" name="mode" value="browser"><span class="mode-icon">◫</span><span><strong>Open drafts in Gmail</strong><small>Open compose windows in a verified browser profile.</small></span></label>
+                    <label class="mode-card"><input type="radio" name="mode" value="draft"><span class="mode-icon">□</span><span><strong>Save drafts to Gmail</strong><small>Create drafts in a connected Gmail account.</small></span></label>
+                    <label class="mode-card danger-mode"><input type="radio" name="mode" value="send"><span class="mode-icon">➤</span><span><strong>Send emails</strong><small>Send through a connected Gmail account.</small></span></label>
                   </div>
                   <div id="browserDelivery" class="delivery-options is-hidden">
-                    <label class="field"><span>Browser sender</span><select id="browserSender"></select></label>
-                    <div class="sender-card" id="browserSenderSummary"><div class="sender-avatar">B</div><div><strong>No sender selected</strong><span>Add a browser sender under Senders.</span></div><button class="button secondary small" id="verifySelectedBrowserButton">Verify</button></div>
+                    <label class="field"><span>Send from</span><select id="browserSender"></select></label>
+                    <div class="sender-card" id="browserSenderSummary"><div class="sender-avatar">B</div><div><strong>No sender selected</strong><span>Choose or configure a browser sender.</span></div><button class="button secondary small" id="verifySelectedBrowserButton">Verify</button></div>
                   </div>
                   <div id="gmailDelivery" class="delivery-options is-hidden">
-                    <label class="field"><span>Gmail account</span><select id="gmailAccount"></select></label>
+                    <label class="field"><span>Send from</span><select id="gmailAccount"></select></label>
                   </div>
                   <div class="field-grid two compact-top">
                     <label class="field"><span>Campaign name</span><input id="campaignName" type="text" placeholder="September outreach"></label>
-                    <label class="field"><span>Schedule <em>optional</em></span><input id="scheduleAt" type="datetime-local"></label>
+                    <label class="field"><span>Send later <em>optional</em></span><input id="scheduleAt" type="datetime-local"></label>
                   </div>
+                  <div class="schedule-notice">Scheduled campaigns run only while MailDesk and this computer remain running.</div>
                   <details class="advanced compact-advanced">
-                    <summary>Optional: pacing and duplicate handling</summary>
+                    <summary>Advanced delivery settings</summary>
                     <div class="field-grid two">
-                      <label class="field"><span>Delay between messages</span><div class="input-suffix"><input id="throttleMs" type="number" min="0" max="60000" value="750"><span>ms</span></div></label>
+                      <label class="field"><span>Delay between emails</span><div class="input-suffix"><input id="throttleMs" type="number" min="0" max="60000" value="750"><span>ms</span></div><small class="field-help">750 ms = 0.75 seconds</small></label>
                       <div class="check-stack"><label class="check-row"><input id="skipDuplicates" type="checkbox" checked><span>Skip exact duplicates already completed successfully</span></label></div>
                     </div>
                   </details>
-                </div>
-              </div>
-            </section>
 
-            <section class="step-pane" data-step-pane="5">
-              <div class="panel final-panel">
-                <div class="panel-head"><div><h2>Review</h2><p>Check the message count, delivery method, sender and timing.</p></div></div>
-                <div class="panel-body">
+                  <div class="send-divider"></div>
                   <div class="final-summary" id="finalSummary"></div>
                   <div id="sendConfirmation" class="send-confirmation is-hidden"><label class="field"><span>To send now, type the confirmation below</span><input id="confirmText" type="text" autocomplete="off"><code id="expectedConfirm"></code></label></div>
-                  <div class="final-actions"><button class="button secondary" id="exportReviewButton">Export review CSV</button><button class="button primary large" id="queueCampaignButton" disabled>Queue campaign</button></div>
-
+                  <div class="final-actions"><button class="button secondary" id="exportReviewButton">Export preview CSV</button><button class="button primary large" id="queueCampaignButton" disabled>Continue</button></div>
                 </div>
               </div>
             </section>
@@ -213,7 +241,7 @@
             <div class="workflow-footer"><button class="button secondary" id="backStepButton">Back</button><button class="button primary" id="nextStepButton">Next</button></div>
           </div>
 
-          <aside class="review-rail">
+          <aside class="review-rail" aria-label="Personalized message preview">
             <div class="review-card">
               <div class="review-head"><div><span class="eyebrow">Message preview</span><strong id="reviewPosition">No checked messages</strong></div><div class="review-nav"><button id="prevMessage" aria-label="Previous message">‹</button><button id="nextMessage" aria-label="Next message">›</button></div></div>
               <div id="reviewEmpty" class="review-empty"><div class="review-empty-icon">✉</div><h3>Message preview</h3><p>Checked messages appear here so you can move through them row by row.</p></div>
@@ -227,25 +255,35 @@
                 <div class="review-meta" id="reviewMeta"></div>
               </div>
             </div>
-            <div class="review-card live-sheet-card" id="liveSheetCard">
-              <div class="review-head"><div><span class="eyebrow">Live sheet</span><strong id="liveSheetSummary">No spreadsheet loaded</strong></div></div>
-              <div class="live-sheet-empty" id="liveSheetEmpty">Load a spreadsheet to keep source rows visible while you write and review.</div>
+            <details class="review-card live-sheet-card" id="liveSheetCard">
+              <summary class="review-head source-row-summary"><div><span class="eyebrow">Source row</span><strong id="liveSheetSummary">No spreadsheet loaded</strong></div><span class="review-expand">View</span></summary>
+              <div class="live-sheet-empty" id="liveSheetEmpty">Load a spreadsheet to inspect source rows beside the message preview.</div>
               <div class="live-sheet-scroll is-hidden" id="liveSheetScroll"><table class="live-sheet-table" id="liveSheetTable"></table></div>
-            </div>
+            </details>
           </aside>
         </div>
       </section>
 
       <section class="view" id="queueView">
-        <div class="section-heading"><div><h2>Campaign queue</h2><p>Track queued, running and completed campaigns.</p></div><button type="button" class="button secondary" id="refreshQueueButton">Refresh</button></div>
+        <div class="section-heading"><div><h2>Campaigns</h2><p>Track active, scheduled and completed campaigns.</p></div><button type="button" class="button secondary" id="refreshQueueButton">Refresh</button></div>
         <div id="queueList" class="queue-list"></div>
       </section>
 
       <section class="view" id="accountsView">
         <div class="accounts-layout">
-          <section class="panel">
-            <div class="panel-head"><div><h2>Gmail accounts</h2><p>Connect Gmail for drafts and sending. Google Sheets access is optional.</p></div><label class="button primary" for="oauthFile">Connect account<input id="oauthFile" type="file" accept="application/json,.json" hidden></label></div>
-            <div class="panel-body"><label class="check-row"><input id="includeSheetsScope" type="checkbox" checked><span>Also allow read-only Google Sheets access</span></label><div id="accountList" class="account-list"></div></div>
+          <section class="panel" data-testid="gmail-oauth-setup">
+            <div class="panel-head">
+              <div><h2>Gmail accounts</h2><p>Set up Google OAuth 2.0 once, then connect or reconnect Gmail accounts without uploading the client file again.</p></div>
+              <div class="button-row">
+                <button type="button" class="button primary" id="connectGoogleButton">Connect Gmail</button>
+                <label class="button secondary" id="oauthFileLabel" for="oauthFile">Set up OAuth<input id="oauthFile" type="file" accept="application/json,.json" hidden></label>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="googleOauthStatus" class="oauth-client-status"></div>
+              <label class="check-row"><input id="includeSheetsScope" type="checkbox"><span>Also grant read-only Google Sheets access (optional; only needed for Google Sheets recipient lists)</span></label>
+              <div id="accountList" class="account-list"></div>
+            </div>
           </section>
           <section class="panel">
             <div class="panel-head"><div><h2>Browser senders</h2><p>MailDesk can read Chromium’s cached account order, then verifies the live Gmail account before use.</p></div><button type="button" class="button secondary" id="newBrowserSenderButton">Add sender</button></div>
@@ -282,7 +320,7 @@
       </section>
 
       <section class="view" id="historyView">
-        <div class="section-heading"><div><h2>Activity history</h2><p>See the result of each draft, send, browser compose and dry run.</p></div><div class="button-row"><a class="button secondary" href="/api/history.csv" target="_blank">Export CSV</a><button class="button secondary" id="refreshHistoryButton">Refresh</button></div></div>
+        <div class="section-heading"><div><h2>Activity</h2><p>Detailed delivery records and troubleshooting information.</p></div><div class="button-row"><a class="button secondary" href="/api/history.csv" target="_blank">Export CSV</a><button class="button secondary" id="refreshHistoryButton">Refresh</button></div></div>
         <div class="table-scroll history-scroll"><table class="data-table" id="historyTable"></table></div>
       </section>
     </main>
@@ -309,7 +347,7 @@
   <dialog id="verifyBrowserDialog" class="modal"><form method="dialog"><h2>Verify browser sender</h2><p id="verifyBrowserText"></p><div class="modal-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" id="confirmBrowserVerifiedButton" value="default">Confirm account</button></div></form></dialog>
 
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
-  <div id="busyOverlay" class="busy-overlay is-hidden"><div class="spinner"></div><strong id="busyTitle">Working…</strong><span id="busyDetail"></span></div>
+  <div id="busyOverlay" class="busy-overlay is-hidden" role="status" aria-live="polite" aria-hidden="true"><div class="spinner" aria-hidden="true"></div><strong id="busyTitle">Working…</strong><span id="busyDetail"></span></div>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

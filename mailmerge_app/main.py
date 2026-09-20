@@ -36,9 +36,11 @@ from .gmail_client import (
     parse_client_secret,
     profile_email,
     refresh_token,
+    revoke_token,
     send_message,
     spreadsheet_id_from_url,
     token_has_scope,
+    token_health,
     token_is_valid,
 )
 from .google_sheets import snapshot_spreadsheet
@@ -48,7 +50,7 @@ from .sheet_reader import SUPPORTED_EXTENSIONS, column_profiles, list_sheets, su
 from .storage import Store
 from .template_engine import batch_fingerprint, html_to_text, is_valid_email, message_fingerprint, render_text, split_addresses
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.1"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -59,6 +61,8 @@ ATTACHMENT_CACHE_MAX_ITEM_BYTES = 8 * 1024 * 1024
 BLOCKED_ATTACHMENT_EXTENSIONS = {".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".js", ".jar"}
 BROWSER_VERIFICATION_MINUTES = 30
 IMPORT_TTL_HOURS = 24
+OAUTH_SESSION_TTL_SECONDS = 600
+OAUTH_SESSION_MAX = 32
 
 store = Store()
 imports: dict[str, dict[str, Any]] = {}
@@ -108,6 +112,9 @@ async def local_origin_guard(request: Request, call_next):
         return Response("Cross-origin request blocked", status_code=403)
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    if request.url.path.startswith("/oauth/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault(
@@ -625,51 +632,143 @@ async def browser_sender_verify_confirm(sender_id: str) -> dict[str, Any]:
 
 
 # ---------- Google accounts ----------
+@app.get("/api/oauth/google/client")
+async def google_client_status() -> dict[str, Any]:
+    return _google_client_status()
+
+
+@app.post("/api/oauth/google/client")
+async def google_client_save(client_secret: UploadFile = File(...)) -> dict[str, Any]:
+    client = await _read_google_oauth_client(client_secret)
+    store.save_oauth_client("google", client)
+    return _google_client_status()
+
+
+@app.delete("/api/oauth/google/client")
+async def google_client_delete() -> dict[str, bool]:
+    store.delete_oauth_client("google")
+    return {"deleted": True}
+
+
 @app.get("/api/accounts")
 async def accounts_list() -> list[dict[str, Any]]:
     output = []
     for item in store.list_accounts():
         try:
             account = store.get_account(item["email"])
-            scopes = str(account[0].get("scope") or "") if account else ""
-            output.append({**item, "gmail": GMAIL_SCOPE in scopes, "sheets": SHEETS_SCOPE in scopes, "credential_error": ""})
+            token = account[0] if account else {}
+            health = token_health(token)
+            scopes = set(health["scopes"])
+            output.append({
+                **item,
+                "gmail": GMAIL_SCOPE in scopes,
+                "sheets": SHEETS_SCOPE in scopes,
+                "credential_error": "",
+                "access_valid": health["access_valid"],
+                "refresh_available": health["refresh_available"],
+                "expires_at": health["expires_at"],
+            })
         except Exception:
-            output.append({**item, "gmail": False, "sheets": False, "credential_error": "Stored credentials could not be read. Disconnect and reconnect this account."})
+            output.append({
+                **item,
+                "gmail": False,
+                "sheets": False,
+                "credential_error": "Stored credentials could not be read. Reconnect this account.",
+                "access_valid": False,
+                "refresh_available": False,
+                "expires_at": "",
+            })
     return output
 
 
 @app.post("/api/accounts/google/start")
-async def google_start(request: Request, client_secret: UploadFile = File(...), include_sheets: bool = Form(True)) -> dict[str, str]:
-    raw = await client_secret.read(MAX_OAUTH_CLIENT_BYTES + 1)
-    if not raw:
-        raise HTTPException(400, "OAuth client JSON is empty.")
-    if len(raw) > MAX_OAUTH_CLIENT_BYTES:
-        raise HTTPException(413, "OAuth client JSON is larger than 2 MB.")
+async def google_start(
+    request: Request,
+    client_secret: UploadFile | None = File(None),
+    include_sheets: bool = Form(True),
+) -> dict[str, str]:
+    client = await _resolve_google_oauth_client(client_secret)
+    return _begin_google_oauth(request, client, include_sheets=include_sheets)
+
+
+@app.post("/api/accounts/{email}/reconnect")
+async def google_reconnect(request: Request, email: str, include_sheets: bool = Form(True)) -> dict[str, str]:
+    existing = None
     try:
-        client = parse_client_secret(raw)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    redirect_uri = str(request.base_url).rstrip("/") + "/oauth/google/callback"
-    scopes = [GMAIL_SCOPE] + ([SHEETS_SCOPE] if include_sheets else [])
-    auth_url, session = new_oauth_request(client, redirect_uri, scopes=scopes)
-    oauth_sessions[session["state"]] = {**session, "client": client, "created": time.time()}
-    _prune_oauth_sessions()
-    return {"auth_url": auth_url}
+        existing = store.get_account(email)
+    except Exception:
+        existing = None
+    client = existing[1] if existing else store.get_oauth_client("google")
+    if not client:
+        raise HTTPException(400, "No reusable Google OAuth client is configured. Upload the Desktop app client JSON first.")
+    existing_token = existing[0] if existing else {}
+    keep_sheets = include_sheets or token_has_scope(existing_token, SHEETS_SCOPE)
+    return _begin_google_oauth(
+        request,
+        client,
+        include_sheets=keep_sheets,
+        login_hint=email,
+        expected_email=email,
+        prompt="consent",
+    )
+
+
+@app.post("/api/accounts/{email}/check")
+async def google_account_check(email: str) -> dict[str, Any]:
+    try:
+        token, actual = await _verified_google_account(email, require_scope=GMAIL_SCOPE)
+    except Exception as exc:
+        raise HTTPException(409, _safe_error(exc)) from exc
+    health = token_health(token)
+    scopes = set(health["scopes"])
+    return {
+        "email": actual,
+        "gmail": GMAIL_SCOPE in scopes,
+        "sheets": SHEETS_SCOPE in scopes,
+        "access_valid": health["access_valid"],
+        "refresh_available": health["refresh_available"],
+        "expires_at": health["expires_at"],
+    }
+
+
+@app.post("/api/accounts/{email}/revoke")
+async def google_account_revoke(email: str) -> dict[str, bool]:
+    if store.account_in_use(email):
+        raise HTTPException(409, "This Google account is used by an active campaign. Cancel or finish that campaign first.")
+    try:
+        account = store.get_account(email)
+    except Exception as exc:
+        raise HTTPException(409, "Stored credentials could not be read. Disconnect locally instead.") from exc
+    if account:
+        try:
+            await revoke_token(account[0])
+        except Exception as exc:
+            raise HTTPException(502, _safe_error(exc)) from exc
+    store.delete_account(email)
+    return {"revoked": True}
 
 
 @app.get("/oauth/google/callback")
-async def google_callback(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+async def google_callback(request: Request, code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+    # State is required for both successful and failed authorization responses.
+    # Consume it exactly once so a stale/cancelled callback cannot be replayed.
+    session = oauth_sessions.pop(state, None) if state else None
+    if not session or time.time() - session.get("created", 0) > OAUTH_SESSION_TTL_SECONDS:
+        return _oauth_page(False, "Authorization session expired or could not be verified. Return to MailDesk and connect again.")
     if error:
-        return _oauth_page(False, f"Google authorization failed: {error}")
-    session = oauth_sessions.pop(state, None)
-    if not session or time.time() - session.get("created", 0) > 600:
-        return _oauth_page(False, "Authorization session expired. Return to MailDesk and connect again.")
+        if error == "access_denied":
+            return _oauth_page(False, "Google authorization was cancelled or denied. No account was changed.")
+        safe_error = re.sub(r"[^a-zA-Z0-9_.-]", "", error)[:80] or "authorization_error"
+        return _oauth_page(False, f"Google authorization failed: {safe_error}")
     if not code:
         return _oauth_page(False, "Google did not return an authorization code.")
     try:
         token = await exchange_code(session["client"], code, session["verifier"], session["redirect_uri"])
         token["scope"] = token.get("scope") or session.get("requested_scopes", "")
         email_address = await profile_email(token)
+        expected_email = str(session.get("expected_email") or "").strip()
+        if expected_email and email_address.casefold() != expected_email.casefold():
+            return _oauth_page(False, f"Google connected {email_address}, but MailDesk was reconnecting {expected_email}. No account was changed.")
         store.save_account(email_address, token, session["client"])
         return _oauth_page(True, f"Connected {email_address}. You can close this tab.")
     except Exception as exc:
@@ -1245,6 +1344,7 @@ async def _run_campaign_locked(campaign_id: str) -> None:
 
             try:
                 remote_id = ""
+                attempt_recorded = False
                 if mode == "dry_run":
                     remote_id = "DryRunOnly"
                 elif mode == "browser":
@@ -1271,12 +1371,14 @@ async def _run_campaign_locked(campaign_id: str) -> None:
                     )
                     if gmail_http is None:
                         raise RuntimeError("Gmail HTTP client was not initialized.")
+                    store.update_item(item["id"], status="InFlight", increment_attempt=True)
+                    attempt_recorded = True
                     remote_id = await (
                         create_draft(gmail_token or {}, raw, http=gmail_http)
                         if mode == "draft"
                         else send_message(gmail_token or {}, raw, http=gmail_http)
                     )
-                store.update_item(item["id"], status="Success", remote_id=remote_id, increment_attempt=True)
+                store.update_item(item["id"], status="Success", remote_id=remote_id, increment_attempt=not attempt_recorded)
                 store.log_operation({**_operation_from_item(current, item, account_label), "remote_id": remote_id, "result": "Success", "error": ""})
                 successful_fingerprints.add(item["fingerprint"])
             except httpx.HTTPStatusError as exc:
@@ -1286,7 +1388,7 @@ async def _run_campaign_locked(campaign_id: str) -> None:
                     ambiguous = mode in {"send", "draft"} and status >= 500
                     item_status = "NeedsReview" if ambiguous else "Failed"
                     result = "Uncertain" if ambiguous else "Failed"
-                    store.update_item(item["id"], status=item_status, error=error, increment_attempt=True)
+                    store.update_item(item["id"], status=item_status, error=error, increment_attempt=not attempt_recorded)
                     store.log_operation({**_operation_from_item(current, item, account_label), "result": result, "error": error})
                     store.refresh_campaign_counts(campaign_id)
                     pause_error = (
@@ -1295,12 +1397,12 @@ async def _run_campaign_locked(campaign_id: str) -> None:
                     )
                     store.set_campaign_status(campaign_id, "Paused", error=pause_error)
                     return
-                store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
+                store.update_item(item["id"], status="Failed", error=error, increment_attempt=not attempt_recorded)
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 error = _safe_error(exc)
                 if mode in {"send", "draft"}:
-                    store.update_item(item["id"], status="NeedsReview", error=error, increment_attempt=True)
+                    store.update_item(item["id"], status="NeedsReview", error=error, increment_attempt=not attempt_recorded)
                     store.log_operation({**_operation_from_item(current, item, account_label), "result": "Uncertain", "error": error})
                     store.refresh_campaign_counts(campaign_id)
                     store.set_campaign_status(
@@ -1309,11 +1411,11 @@ async def _run_campaign_locked(campaign_id: str) -> None:
                         error=f"Gmail {mode} outcome is uncertain; inspect Gmail before resolving this item. {error}",
                     )
                     return
-                store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
+                store.update_item(item["id"], status="Failed", error=error, increment_attempt=not attempt_recorded)
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
             except Exception as exc:
                 error = _safe_error(exc)
-                store.update_item(item["id"], status="Failed", error=error, increment_attempt=True)
+                store.update_item(item["id"], status="Failed", error=error, increment_attempt=not attempt_recorded)
                 store.log_operation({**_operation_from_item(current, item, account_label), "result": "Failed", "error": error})
             store.refresh_campaign_counts(campaign_id)
             if item_index + 1 < len(items):
@@ -1351,6 +1453,75 @@ def _operation_from_item(campaign: dict[str, Any], item: dict[str, Any], account
 
 
 # ---------- common helpers ----------
+def _google_client_status() -> dict[str, Any]:
+    try:
+        info = store.get_oauth_client_info("google")
+    except Exception:
+        return {"configured": False, "client_id_hint": "", "updated_at": "", "credential_error": "Saved OAuth client could not be read. Replace it with a fresh Desktop app JSON file.", "oauth_version": "2.0", "pkce": True, "redirect_mode": "loopback"}
+    if not info:
+        return {"configured": False, "client_id_hint": "", "updated_at": "", "credential_error": "", "oauth_version": "2.0", "pkce": True, "redirect_mode": "loopback"}
+    client_id = str(info["client"].get("client_id") or "")
+    if len(client_id) > 28:
+        hint = f"{client_id[:10]}…{client_id[-16:]}"
+    else:
+        hint = client_id
+    return {"configured": bool(client_id), "client_id_hint": hint, "updated_at": info["updated_at"], "credential_error": "", "oauth_version": "2.0", "pkce": True, "redirect_mode": "loopback"}
+
+
+async def _read_google_oauth_client(upload: UploadFile) -> dict[str, str]:
+    raw = await upload.read(MAX_OAUTH_CLIENT_BYTES + 1)
+    if not raw:
+        raise HTTPException(400, "OAuth client JSON is empty.")
+    if len(raw) > MAX_OAUTH_CLIENT_BYTES:
+        raise HTTPException(413, "OAuth client JSON is larger than 2 MB.")
+    try:
+        return parse_client_secret(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+async def _resolve_google_oauth_client(upload: UploadFile | None) -> dict[str, str]:
+    if upload is not None and upload.filename:
+        client = await _read_google_oauth_client(upload)
+        store.save_oauth_client("google", client)
+        return client
+    try:
+        client = store.get_oauth_client("google")
+    except Exception as exc:
+        raise HTTPException(409, "Saved Google OAuth client could not be read. Replace the Desktop app JSON file.") from exc
+    if not client:
+        raise HTTPException(400, "Set up Google OAuth first by choosing a Desktop app client JSON file.")
+    return {str(key): str(value) for key, value in client.items() if key in {"client_id", "client_secret"} and value}
+
+
+def _begin_google_oauth(
+    request: Request,
+    client: dict[str, str],
+    *,
+    include_sheets: bool,
+    login_hint: str = "",
+    expected_email: str = "",
+    prompt: str = "consent select_account",
+) -> dict[str, str]:
+    redirect_uri = _oauth_redirect_uri(request)
+    scopes = [GMAIL_SCOPE] + ([SHEETS_SCOPE] if include_sheets else [])
+    auth_url, session = new_oauth_request(
+        client,
+        redirect_uri,
+        scopes=scopes,
+        login_hint=login_hint,
+        prompt=prompt,
+    )
+    oauth_sessions[session["state"]] = {
+        **session,
+        "client": client,
+        "created": time.time(),
+        "expected_email": expected_email.strip(),
+    }
+    _prune_oauth_sessions()
+    return {"auth_url": auth_url}
+
+
 async def _verified_google_account(email_address: str, require_scope: str = GMAIL_SCOPE) -> tuple[dict[str, Any], str]:
     try:
         account = store.get_account(email_address)
@@ -1494,10 +1665,37 @@ def _oauth_page(success: bool, message: str) -> HTMLResponse:
     )
 
 
+def _oauth_redirect_uri(request: Request) -> str:
+    """Build the OAuth callback from the actual loopback listener, not Host input.
+
+    Native-app OAuth redirects are security-sensitive. Uvicorn exposes the bound
+    listener in the ASGI scope, so use that port and always force the loopback IP
+    literal recommended for desktop OAuth. TestClient is kept as a special local
+    harness because it has no real loopback listener.
+    """
+
+    server = request.scope.get("server")
+    if isinstance(server, (tuple, list)) and len(server) >= 2:
+        host, port = server[0], server[1]
+        if host == "testserver":
+            return "http://testserver/oauth/google/callback"
+        try:
+            port_number = int(port)
+        except (TypeError, ValueError):
+            port_number = 8765
+    else:
+        port_number = int(os.getenv("MAILMERGE_PORT", "8765"))
+    return f"http://127.0.0.1:{port_number}/oauth/google/callback"
+
+
 def _prune_oauth_sessions() -> None:
-    cutoff = time.time() - 600
+    cutoff = time.time() - OAUTH_SESSION_TTL_SECONDS
     for key in [key for key, value in oauth_sessions.items() if value.get("created", 0) < cutoff]:
         oauth_sessions.pop(key, None)
+    if len(oauth_sessions) > OAUTH_SESSION_MAX:
+        oldest = sorted(oauth_sessions.items(), key=lambda item: float(item[1].get("created", 0)))
+        for key, _value in oldest[: len(oauth_sessions) - OAUTH_SESSION_MAX]:
+            oauth_sessions.pop(key, None)
 
 
 def _csv_safe(value: Any) -> str:

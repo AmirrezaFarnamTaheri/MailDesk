@@ -2,22 +2,22 @@
 
 MailDesk is a **local-first desktop mail-merge application** for preparing reusable email templates, filling them from Excel/CSV/Google Sheets, reviewing every generated message, and then creating browser drafts, Gmail API drafts, or sending through Gmail.
 
-Version: **0.2.1**
+Version: **0.3.1**
 
-## What changed in 0.2
+## What changed in 0.3
 
 The original PowerShell workflow has been generalized into a product rather than wrapped as-is. This release addresses the full next-stage backlog:
 
 1. **Desktop productionization** — native pywebview window, first-run guided tour, single-instance guard, persistent UI preferences, version/about endpoint, database backups, PyInstaller + Inno Setup packaging, optional Authenticode signing.
-2. **Richer templates** — plain text + HTML, signatures, snippets, defaults (`{{Name|there}}`), conditionals (`{{#if Link}}…{{/if}}`), attachments, and Content-ID inline images.
+2. **Guided reusable templates** — plain text + HTML, signatures, snippets, defaults (`{{Name|there}}`), conditionals (`{{#if Link}}…{{/if}}`), attachments, Content-ID inline images, spreadsheet-field insertion, mapping checks, unsaved-change protection, duplication, and a live example recipient preview.
 3. **Smarter spreadsheet handling** — Excel/CSV drag-and-drop, header detection, automatic column suggestions, recipient/name/Cc/Bcc/attachment mapping, filters, row selection, campaign-only cell edits, duplicate-recipient warnings, large-sheet guardrails.
-4. **First-class multi-account support** — Gmail API accounts are separate from browser senders. Browser senders store the browser profile, account index and expected email.
+4. **First-class multi-account support** — Gmail API accounts are separate from browser senders. Google Desktop OAuth setup is reusable across account connections, while each Gmail account keeps its own encrypted token/client pair. Browser senders store the browser profile, account index and expected email.
 5. **Persistent send queue** — each message has a durable state and campaign ID; campaigns can be paused, resumed, cancelled, inspected, throttled, and failed items retried. Interrupted running campaigns come back **Paused**, never silently resumed.
 6. **Delivery controls** — dry run, internal batch-integrity checks, sender verification, duplicate protection, attachment limits, blocked executable attachments, configurable batch cap, and typed confirmation for live sends.
 7. **Scheduling + campaign history** — campaigns may be scheduled, operation history is queryable/exportable, and a local audit ledger records every attempt and remote ID.
-8. **Five-step GUI** — Recipients → Message → Check → Delivery → Review, with a persistent message preview and per-message edits.
+8. **Four-step GUI** — Recipients → Write → Preview → Send, with progressive disclosure, guided template filling, message review, and per-message edits.
 9. **Google Sheets snapshots** — connect with read-only Sheets scope, load a spreadsheet by URL/ID, refresh its snapshot, then review the snapshot before processing.
-10. **Validation/distribution** — Windows/Linux CI, Python 3.11/3.13 coverage, JavaScript syntax checks, migration backups, token/error redaction, malformed-workbook tests, RTL/Unicode tests, large-sheet tests, queue restart tests, and installer artifacts.
+10. **Validation/distribution** — Windows/Linux CI, Python 3.11/3.13 coverage, JavaScript syntax checks, a Playwright visual-review journey with uploaded screenshots, migration backups, token/error redaction, malformed-workbook tests, RTL/Unicode tests, large-sheet tests, queue restart tests, and installer artifacts.
 
 ## Browser accounts
 
@@ -89,15 +89,20 @@ For Gmail API drafts/sends and Google Sheets:
 3. Configure an OAuth consent screen.
 4. Create an OAuth Client ID of type **Desktop app**.
 5. Download its JSON.
-6. In **Senders**, choose **Connect account** and select the JSON.
-7. Leave read-only Google Sheets access enabled if you want Sheet snapshots.
+6. In **Senders → Gmail accounts**, choose **Set up & connect** and select the JSON once.
+7. Complete Google sign-in. MailDesk stores the Desktop client encrypted on this device, so later accounts can use **Connect Gmail** without selecting the JSON again.
+8. Leave read-only Google Sheets access enabled if you want Sheet snapshots.
+
+Each connected account now exposes **Check** and **Reconnect** actions. Reconnect is locked to the expected email address, so authorizing the wrong Google account cannot silently replace another sender. A local **Disconnect** only removes MailDesk's stored credential; the API also exposes explicit revocation when a full Google authorization revoke is required.
 
 Scopes used:
 
 - Gmail compose: `https://www.googleapis.com/auth/gmail.compose`
 - Google Sheets read-only: `https://www.googleapis.com/auth/spreadsheets.readonly`
 
-MailDesk does not request general Gmail read access or Google Drive access.
+MailDesk deliberately does **not** switch to legacy password authentication, embed an IMAP/SMTP proxy, request `https://mail.google.com/`, request general Gmail read access, or request Google Drive access. Gmail API delivery remains the default because it provides the app's required draft/send behavior with a narrower permission set.
+
+See `docs/OAUTH-INTEGRATION.md` for how the supplied OAuth/Gmail reference projects were evaluated and integrated.
 
 ## Template syntax
 
@@ -193,7 +198,7 @@ Outputs:
 
 ```text
 dist/MailDesk.exe
-dist/installer/MailDesk-0.2.0-Setup.exe
+dist/installer/MailDesk-0.3.1-Setup.exe
 ```
 
 Optional signing:
@@ -230,12 +235,25 @@ MAILMERGE_SIGN_CERT_PASSWORD
 
 `MAILMERGE_SIGN_CERT_BASE64` must contain the base64-encoded PFX bytes. If the secrets are absent, the workflow still produces unsigned artifacts.
 
+### CI visual review
+
+The standard CI workflow also runs a focused Playwright journey on Ubuntu. It starts the real local application, opens **Senders**, verifies the Gmail OAuth and browser-sender surfaces, and uploads the resulting screenshot and server log as a `MailDesk-Visual-Review-<commit>` artifact. The tour is suppressed only for this stable visual baseline; it remains covered by frontend regression tests. This is an approval aid for UI changes, while the browser assertions make it a genuine end-to-end gate.
+
 ## Test
 
 ```bash
 python -m unittest discover -s tests -v
+pytest -q
 node --check mailmerge_app/static/app.js
 python -m compileall -q mailmerge_app
+```
+
+To capture the running desktop interface in a repeatable browser viewport:
+
+```bash
+python -m playwright install chromium
+python scripts/capture_screenshot.py --full-page
+python scripts/visual_review_e2e.py --output artifacts/visual-review/senders.png
 ```
 
 The suite covers template safety, Unicode/RTL, spreadsheet parsing, mapping suggestions, large workbooks, OAuth/PKCE scopes, MIME HTML/attachments, Gmail account slots, persistent queue behavior, restart pausing, malformed uploads, executable attachment blocking, and dry-run execution.

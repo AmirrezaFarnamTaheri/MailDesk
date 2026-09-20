@@ -8,36 +8,57 @@ Load an Excel/CSV file or a Google Sheet. Confirm the worksheet, header row and 
 
 Use **More recipient options** only when you need Cc/Bcc columns, filtering, sorting or a row limit. You can select rows and make campaign-only cell edits without changing the original spreadsheet.
 
-## 2. Message
+## 2. Write
 
-Start with the built-in **General message** template or create your own. Use placeholders such as `{{Name|there}}`, optional conditions, snippets, HTML, signatures and attachments as needed. **Placeholder mapping** lets a reusable token such as `{{Name}}` read from any spreadsheet column, even when the source header has a different name. The live sheet stays beside the message preview so you can compare source values with the rendered message row by row.
+Choose a saved template or click **New blank**. Give reusable messages a clear **Template name**; MailDesk shows whether the template is saved or has unsaved changes, and warns before switching away from unsaved work. Use **Duplicate** when you want to make a variant without changing the original.
 
-## 3. Check
+Write the subject and message normally. To personalize them, use **Add spreadsheet data**:
 
-Choose **Check messages** to generate the personalized result for every selected row. Fix blocking errors before continuing.
+1. Choose the spreadsheet column under **Fill from**.
+2. Add a **Fallback if blank** when an empty value should still produce a natural message, such as `there` for a first-name greeting.
+3. Choose where to insert it: **Message**, **Subject**, **Cc**, or **Bcc**.
+4. Click **Insert field**. MailDesk creates the safe template token and remembers which sheet column fills it.
 
-Use the preview on the right or open a validation row to inspect individual messages. One-off edits can be made directly in the preview before the campaign is queued.
+The generated token remains compatible with MailDesk's template language, for example `{{FirstName|there}}`. **Use a custom field name** is available when you want a reusable field name that differs from the spreadsheet header. **Only show when filled** inserts a conditional block for optional content.
 
-## 4. Delivery
+The **Fields used in this template** section shows every field, its source column, fallback, and a sample value. Use **Auto-match columns** when loading a template whose field names differ from the current sheet.
 
-Choose one delivery mode:
+The **Live example** panel fills the template with a real spreadsheet row while you edit it. Change **Example recipient** to test another row. Resolve any “Needs mapping” or blank-value warning before saving or continuing. This is the fastest way to check that greetings, company names, links, and other personalized fields read naturally.
 
-- **Dry run** — build and validate the queue without sending.
-- **Browser compose** — open reviewed drafts in a configured browser sender.
-- **Gmail drafts** — create drafts through a connected Gmail account.
-- **Send email** — send through a connected Gmail account.
+Snippets, attachments, formatted HTML, signatures and Cc/Bcc options remain available under **More writing tools**.
 
-Campaign name, schedule, pacing and duplicate handling are optional.
+## 3. Preview
 
-## 5. Review
+MailDesk automatically prepares personalized messages for manageable batches as you edit. Open **Preview** to inspect the generated result for every selected row. Use **Refresh preview** when you explicitly want to rebuild it. Fix blocking errors before continuing; one-off recipient/message edits can still be made from the message preview.
 
-Confirm the message count, delivery mode, sender and timing. Live sending requires one typed confirmation: `SEND N`, where `N` is the number of messages.
+## 4. Send
 
-## Queue
+Choose one delivery action:
 
-Use **Queue** to inspect progress, pause or resume work, retry failed messages, cancel a campaign, and inspect row-level results.
+- **Test only** — validate the campaign without creating or sending email.
+- **Open drafts in Gmail** — open reviewed compose windows in a verified browser sender.
+- **Save drafts to Gmail** — create drafts through a connected Gmail account.
+- **Send emails** — send through a connected Gmail account.
+
+Campaign name, schedule, pacing and duplicate handling are optional. Scheduled work requires MailDesk and the computer to remain running. Live sending requires one typed confirmation: `SEND N`, where `N` is the number of messages.
+
+## Campaigns
+
+Use **Campaigns** to inspect active, scheduled and completed campaigns, pause or resume work, retry failed messages, cancel a campaign, and inspect row-level results.
 
 If Gmail returns an uncertain result during a draft or send operation, MailDesk pauses the affected item instead of guessing. Check Gmail, then mark the item as completed or not completed before resuming.
+
+## Gmail accounts
+
+Open **Senders → Gmail accounts**. On first setup, choose **Set up & connect** and select a Google OAuth **Desktop app** JSON file. MailDesk encrypts and remembers that client configuration locally. After the first setup, use **Connect Gmail** to add another account without choosing the JSON again.
+
+Leave **Google Sheets access** enabled when you want that account to load Sheet snapshots. Existing accounts show:
+
+- **Check** — refresh credentials if necessary and verify the live Gmail account identity.
+- **Reconnect** — repeat authorization for the same expected email address, preserving an existing Sheets grant unless you explicitly reconnect without it from a clean account.
+- **Disconnect** — remove the account from MailDesk locally. This is intentionally different from revoking the Google authorization.
+
+If the saved Desktop OAuth client becomes invalid or is replaced, choose **Use another OAuth client**. Forgetting the reusable client does not disconnect accounts that are already stored because each account retains the encrypted client that issued its refresh token.
 
 ## Browser senders
 

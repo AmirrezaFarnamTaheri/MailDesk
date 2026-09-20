@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.1
+
+- Hardened the built-in Google OAuth 2.0 authorization-code flow: canonical loopback redirect construction, one-time callback state consumption, bounded authorization sessions, no-store callback responses, stricter bearer-token validation, and clearer provider errors.
+- Google Sheets read-only permission is now opt-in for new connections; Gmail-only users request only the Gmail compose permission.
+- Sender setup now identifies the flow explicitly as OAuth 2.0 + PKCE.
+
+## 0.3.0
+
+- integrated a reusable OAuth 2.0 client lifecycle module with PKCE, refresh-token rotation, safe provider errors and explicit revocation;
+- added encrypted one-time Google Desktop OAuth client setup so additional Gmail accounts no longer require re-uploading the client JSON;
+- added Gmail account health checks and account-bound reconnect flows that reject a callback for the wrong Google identity;
+- exposed non-secret token health metadata without returning access tokens, refresh tokens or client secrets;
+- retained the narrower Gmail API compose transport instead of embedding legacy password auth, OAuth 1.0, or the supplied IMAP/POP/SMTP proxy;
+- documented the compatibility decisions for all supplied OAuth/Gmail reference projects;
+- expanded OAuth, API and frontend regression coverage.
+
 ## 0.2.0
 
 - redesigned five-stage campaign workflow;
