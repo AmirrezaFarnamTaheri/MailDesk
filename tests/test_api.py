@@ -175,11 +175,11 @@ class ApiFlowTests(unittest.TestCase):
             time.sleep(.01)
         self.assertNotIn(cid, self.main.queue_tasks)
 
-    def test_send_requires_exact_batch_confirmation_before_account_lookup(self):
+    def test_send_requires_confirmation_dialog_before_account_lookup(self):
         messages=[self._message()]
         batch_id=self._batch_id(messages)
-        response=self.client.post('/api/campaigns',json={"name":"Send","mode":"send","account":"missing@example.com","batch_id":batch_id,"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","confirm_text":""})
-        self.assertEqual(response.status_code,400); self.assertIn("SEND 1",response.json()["detail"])
+        response=self.client.post('/api/campaigns',json={"name":"Send","mode":"send","account":"missing@example.com","batch_id":batch_id,"messages":messages,"skip_duplicates":True,"throttle_ms":0,"scheduled_at":"","send_confirmed":False})
+        self.assertEqual(response.status_code,400); self.assertIn("confirmation dialog",response.json()["detail"])
 
     def test_campaign_api_rejects_blank_recipient_even_if_client_claims_no_errors(self):
         messages = [self._message("")]

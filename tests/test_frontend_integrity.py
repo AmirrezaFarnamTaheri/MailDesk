@@ -99,7 +99,9 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertNotIn('unlockedStep:state.unlockedStep', APP_JS)
 
     def test_send_confirmation_is_simple_and_mode_specific(self):
-        self.assertIn("`SEND ${r.messages.length}`", APP_JS)
+        self.assertIn("function openSendConfirmation()", APP_JS)
+        self.assertIn("id=\"sendConfirmDialog\"", INDEX_HTML)
+        self.assertIn("Confirm email delivery", INDEX_HTML)
         self.assertNotIn("batch_id[:8]", APP_JS)
         self.assertNotIn("reviewed:", APP_JS)
 

@@ -2,7 +2,7 @@
 
 MailDesk is a **local-first desktop mail-merge application** for preparing reusable email templates, filling them from Excel/CSV/Google Sheets, reviewing every generated message, and then creating browser drafts, Gmail API drafts, or sending through Gmail.
 
-Version: **0.4.0**
+Version: **0.4.1**
 
 ## What changed in 0.4
 
@@ -157,15 +157,9 @@ For a scheduled **browser** campaign, account verification may expire before exe
 
 ## Real-send confirmation
 
-For `N` messages, live sending requires:
+For `N` messages, live sending requires a confirmation dialog that shows the recipient count and selected Gmail account. Choose **Send emails** in that dialog to continue; cancelling leaves the campaign unchanged.
 
-1. zero blocking validation errors;
-2. a connected Gmail account;
-3. typing:
-
-```text
-SEND N
-```
+Live sending still requires zero blocking validation errors and a connected Gmail account.
 
 MailDesk still verifies the rendered batch internally before processing it; the internal fingerprint is not exposed as a user confirmation step.
 
@@ -198,7 +192,7 @@ Outputs:
 
 ```text
 dist/MailDesk.exe
-dist/installer/MailDesk-0.4.0-Setup.exe
+dist/installer/MailDesk-0.4.1-Setup.exe
 ```
 
 Optional signing:

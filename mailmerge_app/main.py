@@ -51,7 +51,7 @@ from .sheet_reader import SUPPORTED_EXTENSIONS, column_profiles, list_sheets, su
 from .storage import Store
 from .template_engine import batch_fingerprint, html_to_text, is_valid_email, message_fingerprint, render_text, split_addresses
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -225,7 +225,7 @@ class CampaignRequest(BaseModel):
     skip_duplicates: bool = True
     throttle_ms: int = Field(default=750, ge=0, le=60_000)
     scheduled_at: str = Field(default="", max_length=80)
-    confirm_text: str = Field(default="", max_length=200)
+    send_confirmed: bool = False
 
 
 class SettingsPayload(BaseModel):
@@ -674,6 +674,16 @@ async def browser_sender_verify_open(sender_id: str) -> dict[str, Any]:
     }
 
 
+@app.post("/api/browser-senders/{sender_id}/recovery/open-default-browser")
+async def browser_sender_recovery_open_default_browser(sender_id: str) -> dict[str, bool]:
+    sender = store.get_browser_sender(sender_id)
+    if not sender:
+        raise HTTPException(404, "Browser sender not found.")
+    if not webbrowser.open(inbox_url(int(sender["gmail_slot"])), new=2):
+        raise HTTPException(409, "Could not open your system default browser. Open Gmail manually, then rescan browsers.")
+    return {"opened": True}
+
+
 @app.post("/api/browser-senders/{sender_id}/verify/confirm")
 async def browser_sender_verify_confirm(sender_id: str) -> dict[str, Any]:
     sender = store.get_browser_sender(sender_id)
@@ -847,9 +857,8 @@ async def campaign_create(payload: CampaignRequest) -> dict[str, Any]:
         raise HTTPException(409, "Messages changed. Check the current messages again before processing.")
 
     if payload.mode == "send":
-        expected = f"SEND {len(payload.messages)}"
-        if payload.confirm_text.strip() != expected:
-            raise HTTPException(400, f"Sending requires typing exactly: {expected}")
+        if not payload.send_confirmed:
+            raise HTTPException(400, "Confirm sending in the MailDesk confirmation dialog.")
         if not payload.account:
             raise HTTPException(400, "Select a connected Gmail account.")
     elif payload.mode == "draft" and not payload.account:
